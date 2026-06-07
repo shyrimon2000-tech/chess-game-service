@@ -71,7 +71,7 @@ def mock_game_service_redis():
     # Publisher is patched at function level, not via redis.from_url — both patches
     # would target the same attribute on the redis module and the second would win.
     with patch("app.services.game_service.redis_lib.from_url") as mock_redis, \
-         patch("app.services.game_service.asyncio.create_task") as mock_task, \
+         patch("app.routers.ws.asyncio.create_task") as mock_task, \
          patch("app.events.publisher.publish_game_over"), \
          patch("app.events.publisher.publish_game_abandoned"):
         redis_client = MagicMock()

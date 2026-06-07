@@ -244,12 +244,10 @@ def test_disconnect_waiting_game_publishes_abandoned(mock_redis):
     assert client.get("/games/1").json()["status"] == "finished"
 
 
-@patch("app.services.game_service.asyncio.create_task")
 @patch("app.services.game_service.redis_lib.from_url")
-def test_disconnect_active_game_sets_redis_key(mock_redis, mock_create_task):
+def test_disconnect_active_game_sets_redis_key(mock_redis):
     mock_client = MagicMock()
     mock_redis.return_value = mock_client
-    mock_create_task.side_effect = lambda coro: coro.close()
 
     setup_active_game()
     db = TestingSessionLocal()

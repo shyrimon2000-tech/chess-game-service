@@ -1,14 +1,33 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.connection_manager import manager
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.schemas import GameResponse
 from app.services import game_service
 
 router = APIRouter()
+
+
+async def _disconnect_timeout(game_id: int, color: str):
+    await asyncio.sleep(game_service.DISCONNECT_TTL)
+
+    db = SessionLocal()
+    try:
+        game = game_service.timeout_disconnect(db, game_id, color)
+        if game is not None:
+            await manager.broadcast(game_id, {
+                "type": "game_over",
+                "game": _serialize_game(game),
+            })
+    except Exception:
+        pass
+    finally:
+        db.close()
 
 
 def _decode_token(token: str) -> int | None:
@@ -118,6 +137,7 @@ async def game_websocket(
                         "color": color,
                         "reconnect_seconds": 30,
                     })
+                    asyncio.create_task(_disconnect_timeout(game_id, color))
                 elif current_game.status == "waiting":
                     game_service.handle_disconnect(db, game_id, user_id)
                     await manager.broadcast(game_id, {"type": "game_abandoned"})

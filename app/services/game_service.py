@@ -1,11 +1,8 @@
-import asyncio
-
 import chess
 import redis as redis_lib
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import SessionLocal
 from app.events.publisher import publish_game_abandoned, publish_game_over
 from app.repositories import game_repo
 
@@ -151,8 +148,6 @@ def handle_disconnect(db: Session, game_id: int, user_id: int):
     key = f"game:disconnect:{game_id}:{color}"
     client.set(key, "1", ex=DISCONNECT_TTL)
 
-    asyncio.create_task(_disconnect_timeout(game_id, color))
-
 
 def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     game = game_repo.get_game_by_id(db, game_id)
@@ -172,27 +167,23 @@ def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     return bool(deleted)
 
 
-async def _disconnect_timeout(game_id: int, color: str):
-    await asyncio.sleep(DISCONNECT_TTL)
-
+def timeout_disconnect(db: Session, game_id: int, color: str):
+    """Called after disconnect TTL expires. Returns finished game or None if player reconnected."""
     client = redis_lib.from_url(settings.REDIS_URL)
     key = f"game:disconnect:{game_id}:{color}"
 
     if not client.exists(key):
-        return
+        return None
 
     client.delete(key)
 
-    db = SessionLocal()
-    try:
-        game = game_repo.get_game_by_id(db, game_id)
-        if game is None or game.status != "active":
-            return
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None or game.status != "active":
+        return None
 
-        winner = "black" if color == "white" else "white"
-        game.status = "finished"
-        game.winner = winner
-        game_repo.save_game(db, game)
-        publish_game_over(game.id, game.room_id, winner)
-    finally:
-        db.close()
+    winner = "black" if color == "white" else "white"
+    game.status = "finished"
+    game.winner = winner
+    game_repo.save_game(db, game)
+    publish_game_over(game.id, game.room_id, winner)
+    return game
