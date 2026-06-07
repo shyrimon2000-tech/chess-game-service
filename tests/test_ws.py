@@ -72,8 +72,7 @@ def mock_game_service_redis():
     # would target the same attribute on the redis module and the second would win.
     with patch("app.services.game_service.redis_lib.from_url") as mock_redis, \
          patch("app.routers.ws.asyncio.create_task") as mock_task, \
-         patch("app.events.publisher.publish_game_over"), \
-         patch("app.events.publisher.publish_game_abandoned"):
+         patch("app.events.publisher._client"):
         redis_client = MagicMock()
         redis_client.delete.return_value = 0
         redis_client.set.return_value = True

@@ -144,11 +144,8 @@ def test_make_move_on_waiting_game_rejected():
     assert response.status_code == 400
 
 
-@patch("app.events.publisher.redis.from_url")
-def test_checkmate_finishes_game(mock_redis):
-    mock_client = MagicMock()
-    mock_redis.return_value = mock_client
-
+@patch("app.events.publisher._client")
+def test_checkmate_finishes_game(mock_client):
     setup_active_game()
 
     # Fool's mate: 1.f3 e5 2.g4 Qh4#
@@ -186,11 +183,8 @@ def test_legal_moves_empty_square_returns_empty():
 
 # --- resign ---
 
-@patch("app.events.publisher.redis.from_url")
-def test_resign_game_finishes_game(mock_redis):
-    mock_client = MagicMock()
-    mock_redis.return_value = mock_client
-
+@patch("app.events.publisher._client")
+def test_resign_game_finishes_game(mock_client):
     setup_active_game()
 
     as_user(1)
@@ -202,9 +196,8 @@ def test_resign_game_finishes_game(mock_redis):
     mock_client.publish.assert_called_once()
 
 
-@patch("app.events.publisher.redis.from_url")
-def test_resign_game_black_wins_if_white_resigns(mock_redis):
-    mock_redis.return_value = MagicMock()
+@patch("app.events.publisher._client")
+def test_resign_game_black_wins_if_white_resigns(mock_client):
     setup_active_game()
     as_user(2)
     data = client.post("/games/1/resign").json()
@@ -225,11 +218,8 @@ def test_resign_game_not_active_rejected():
 
 # --- disconnect / reconnect ---
 
-@patch("app.events.publisher.redis.from_url")
-def test_disconnect_waiting_game_publishes_abandoned(mock_redis):
-    mock_client = MagicMock()
-    mock_redis.return_value = mock_client
-
+@patch("app.events.publisher._client")
+def test_disconnect_waiting_game_publishes_abandoned(mock_client):
     create_game(room_id=1, white_player_id=1)
     db = TestingSessionLocal()
     try:
