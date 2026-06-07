@@ -200,6 +200,19 @@ def test_ws_resign_broadcasts_game_over():
 
 # --- reconnect ---
 
+def test_ws_reconnect_sends_game_state_to_reconnecting_player(mock_game_service_redis):
+    mock_game_service_redis.delete.return_value = 1  # white had an active disconnect key
+
+    http_create_game()
+    http_activate_game()
+
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as ws:
+        msg = ws.receive_json()
+
+    assert msg["type"] == "game_state"
+    assert msg["game"]["status"] == "active"
+
+
 def test_ws_reconnect_broadcasts_player_reconnected(mock_game_service_redis):
     # Single-connection test: the reconnecting player receives their own broadcast
     # (same event loop — no cross-portal send issue).
@@ -209,7 +222,8 @@ def test_ws_reconnect_broadcasts_player_reconnected(mock_game_service_redis):
     http_activate_game()
 
     with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as ws:
-        msg = ws.receive_json()
+        ws.receive_json()  # game_state (personal sync)
+        msg = ws.receive_json()  # player_reconnected (broadcast)
 
     assert msg["type"] == "player_reconnected"
     assert msg["color"] == "white"

@@ -85,6 +85,10 @@ async def game_websocket(
         was_disconnected = game_service.handle_reconnect(db, game_id, user_id)
         if was_disconnected:
             color = "white" if game.white_player_id == user_id else "black"
+            await manager.send_personal(websocket, {
+                "type": "game_state",
+                "game": _serialize_game(game),
+            })
             await manager.broadcast(game_id, {
                 "type": "player_reconnected",
                 "color": color,
