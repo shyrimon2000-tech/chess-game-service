@@ -3,6 +3,15 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 
+class CreateGameRequest(BaseModel):
+    room_id: int
+    white_player_id: int
+
+
+class MakeMoveRequest(BaseModel):
+    move: str
+
+
 class GameResponse(BaseModel):
     id: int
     room_id: int

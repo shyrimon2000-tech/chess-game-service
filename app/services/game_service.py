@@ -12,6 +12,13 @@ from app.repositories import game_repo
 DISCONNECT_TTL = 30
 
 
+def get_game(db: Session, game_id: int):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    return game
+
+
 def create_game(db: Session, room_id: int, white_player_id: int):
     return game_repo.create_game(db, room_id, white_player_id)
 
