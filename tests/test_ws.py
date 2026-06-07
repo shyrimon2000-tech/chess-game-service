@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from app.main import app
 from app.database import Base, get_db
+from app.services import game_service
 from app.services.auth_dependencies import CurrentUser, get_current_user
 
 engine = create_engine(
@@ -44,8 +45,11 @@ def as_user(user_id: int):
 
 
 def http_create_game(room_id=1, white_id=1, black_id=2):
-    as_user(white_id)
-    client.post("/games", json={"room_id": room_id, "white_player_id": white_id, "black_player_id": black_id})
+    db = TestingSessionLocal()
+    try:
+        game_service.create_game(db, room_id, white_id, black_id)
+    finally:
+        db.close()
 
 
 def http_activate_game(game_id=1, black_id=2):

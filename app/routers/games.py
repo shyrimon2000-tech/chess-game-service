@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas import CreateGameRequest, GameResponse, MakeMoveRequest
+from app.schemas import GameResponse, MakeMoveRequest
 from app.services import game_service
 from app.services.auth_dependencies import CurrentUser, get_current_user
 
@@ -11,17 +11,6 @@ router = APIRouter(
     tags=["games"],
 )
 
-
-@router.post("", response_model=GameResponse, status_code=201)
-def create_game(
-    body: CreateGameRequest,
-    db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    try:
-        return game_service.create_game(db, body.room_id, body.white_player_id, body.black_player_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{game_id}", response_model=GameResponse)

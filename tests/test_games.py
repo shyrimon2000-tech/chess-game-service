@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from app.main import app
 from app.database import get_db
 from app.models import Base, INITIAL_FEN
+from app.services import game_service
 from app.services.auth_dependencies import CurrentUser, get_current_user
 
 engine = create_engine(
@@ -48,12 +49,11 @@ def reset_state():
 # --- Helpers ---
 
 def create_game(room_id=1, white_player_id=1, black_player_id=None):
-    as_user(white_player_id)
-    return client.post("/games", json={
-        "room_id": room_id,
-        "white_player_id": white_player_id,
-        "black_player_id": black_player_id,
-    })
+    db = TestingSessionLocal()
+    try:
+        return game_service.create_game(db, room_id, white_player_id, black_player_id)
+    finally:
+        db.close()
 
 
 def join_game(game_id: int, user_id: int):
@@ -74,20 +74,13 @@ def make_move(game_id: int, user_id: int, move: str):
 # --- create_game ---
 
 def test_create_game_returns_correct_fields():
-    response = create_game(room_id=1, white_player_id=1)
-    assert response.status_code == 201
-    data = response.json()
-    assert data["room_id"] == 1
-    assert data["white_player_id"] == 1
-    assert data["status"] == "waiting"
-    assert data["board_state"] == INITIAL_FEN
-    assert data["black_player_id"] is None
-    assert data["current_turn"] is None
-
-
-def test_create_game_requires_auth():
-    response = client.post("/games", json={"room_id": 1, "white_player_id": 1})
-    assert response.status_code == 401
+    game = create_game(room_id=1, white_player_id=1)
+    assert game.room_id == 1
+    assert game.white_player_id == 1
+    assert game.status == "waiting"
+    assert game.board_state == INITIAL_FEN
+    assert game.black_player_id is None
+    assert game.current_turn is None
 
 
 # --- join_game ---
