@@ -20,14 +20,13 @@ def _handle_message(message):
         logger.error("Failed to parse room event: %s", message)
         return
 
-    if data.get("event") == "room_activated":
+    if data.get("event") == "room_created":
         db = SessionLocal()
         try:
             game_service.create_game(
                 db,
                 room_id=data["room_id"],
                 white_player_id=data["white_player_id"],
-                black_player_id=data["black_player_id"],
             )
         except Exception:
             logger.exception("Failed to create game for room %s", data.get("room_id"))

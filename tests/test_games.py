@@ -101,6 +101,15 @@ def test_join_game_activates_game():
     assert data["current_turn"] == "white"
 
 
+def test_join_game_assigns_black_when_slot_empty():
+    create_game(room_id=1, white_player_id=1)
+    response = join_game(game_id=1, user_id=2)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "active"
+    assert data["black_player_id"] == 2
+
+
 def test_join_game_non_player_rejected():
     create_game(room_id=1, white_player_id=1, black_player_id=2)
     response = join_game(game_id=1, user_id=3)

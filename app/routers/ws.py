@@ -42,7 +42,10 @@ async def game_websocket(
         await websocket.close(code=4004)
         return
 
-    is_player = user_id in (game.white_player_id, game.black_player_id)
+    is_player = (
+        user_id in (game.white_player_id, game.black_player_id)
+        or (game.black_player_id is None and user_id != game.white_player_id and game.status == "waiting")
+    )
     await manager.connect(game_id, websocket, user_id if is_player else None)
 
     just_activated = False

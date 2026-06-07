@@ -34,7 +34,10 @@ def join_game(db: Session, game_id: int, user_id: int):
         raise ValueError("Game not found")
     if game.status != "waiting":
         raise ValueError("Game is not waiting for a player")
-    if user_id not in (game.white_player_id, game.black_player_id):
+
+    if game.black_player_id is None and user_id != game.white_player_id:
+        game.black_player_id = user_id
+    elif user_id not in (game.white_player_id, game.black_player_id):
         raise ValueError("You are not a player in this game")
 
     game.status = "active"
