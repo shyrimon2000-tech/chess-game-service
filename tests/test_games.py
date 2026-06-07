@@ -231,15 +231,17 @@ def test_disconnect_waiting_game_publishes_abandoned(mock_redis):
     mock_redis.return_value = mock_client
 
     create_game(room_id=1, white_player_id=1)
-    as_user(1)
-    response = client.post("/games/1/disconnect")
-    assert response.status_code == 200
+    db = TestingSessionLocal()
+    try:
+        game_service.handle_disconnect(db, 1, 1)
+    finally:
+        db.close()
 
     payload = mock_client.publish.call_args[0][1]
     assert "game_abandoned" in payload
 
-    data = client.get("/games/1").json()
-    assert data["status"] == "finished"
+    as_user(1)
+    assert client.get("/games/1").json()["status"] == "finished"
 
 
 @patch("app.services.game_service.asyncio.create_task")
@@ -250,10 +252,12 @@ def test_disconnect_active_game_sets_redis_key(mock_redis, mock_create_task):
     mock_create_task.side_effect = lambda coro: coro.close()
 
     setup_active_game()
+    db = TestingSessionLocal()
+    try:
+        game_service.handle_disconnect(db, 1, 1)
+    finally:
+        db.close()
 
-    as_user(1)
-    response = client.post("/games/1/disconnect")
-    assert response.status_code == 200
     mock_client.set.assert_called_once_with("game:disconnect:1:white", "1", ex=30)
 
 
@@ -264,8 +268,10 @@ def test_reconnect_deletes_redis_key(mock_redis):
     mock_redis.return_value = mock_client
 
     setup_active_game()
+    db = TestingSessionLocal()
+    try:
+        game_service.handle_reconnect(db, 1, 1)
+    finally:
+        db.close()
 
-    as_user(1)
-    response = client.post("/games/1/reconnect")
-    assert response.status_code == 200
     mock_client.delete.assert_called_once_with("game:disconnect:1:white")

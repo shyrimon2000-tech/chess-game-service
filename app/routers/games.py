@@ -76,27 +76,3 @@ def resign(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/{game_id}/disconnect")
-def handle_disconnect(
-    game_id: int,
-    db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    try:
-        game_service.handle_disconnect(db, game_id, current_user.id)
-        return {"status": "ok"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/{game_id}/reconnect")
-def handle_reconnect(
-    game_id: int,
-    db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    try:
-        game_service.handle_reconnect(db, game_id, current_user.id)
-        return {"status": "ok"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))

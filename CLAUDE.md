@@ -251,11 +251,9 @@ cp .env.example .env
 | `POST` | `/games/{game_id}/move` | Make a move (UCI format, e.g. `e2e4`) |
 | `GET` | `/games/{game_id}/legal-moves?square=e2` | Get legal moves for a square |
 | `POST` | `/games/{game_id}/resign` | Resign the game |
-| `POST` | `/games/{game_id}/disconnect` | Notify server of disconnect (starts 30s timer) |
-| `POST` | `/games/{game_id}/reconnect` | Cancel disconnect timer |
 | `WS` | `/ws/games/{game_id}?token=<jwt>` | Real-time gameplay channel |
 
-Games are created exclusively via the `room_created` Redis event — there is no `POST /games` endpoint.
+Games are created exclusively via the `room_created` Redis event — there is no `POST /games` endpoint. Disconnect and reconnect are handled automatically by the WebSocket handler — there are no HTTP endpoints for them.
 
 ## WebSocket Message Types
 
