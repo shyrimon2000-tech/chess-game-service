@@ -85,7 +85,8 @@ alembic/
 
 tests/
 ├── test_games.py
-└── test_ws.py
+├── test_ws.py
+└── test_subscriber.py
 ```
 
 ---
@@ -227,7 +228,7 @@ WS /ws/games/{game_id}?token=<jwt>
 
 The JWT access token is passed as a query parameter because the WebSocket protocol does not support custom headers.
 
-Spectators can connect — they receive game state broadcasts but cannot send moves.
+Spectators can connect — they receive the current game state immediately on connect and all subsequent broadcasts, but cannot send moves.
 
 ### Client → Server Messages
 
@@ -347,8 +348,8 @@ When a player disconnects from an active game:
 
 1. Server broadcasts `player_disconnected` to all connections
 2. A 30-second key is set in Redis: `game:disconnect:{game_id}:{color}`
-3. If the player reconnects within 30 seconds, the key is deleted and `player_reconnected` is broadcast
-4. If 30 seconds pass without reconnection, the disconnected player loses and `game_over` is published to Redis
+3. If the player reconnects within 30 seconds, the key is deleted, the reconnecting player receives the current `game_state` personally, and `player_reconnected` is broadcast to all
+4. If 30 seconds pass without reconnection, the disconnected player loses, `game_over` is broadcast via WebSocket to remaining connections, and `game_over` is published to Redis
 
 ---
 
@@ -544,45 +545,18 @@ Test coverage includes:
 - WebSocket: legal moves sent only to requester
 - WebSocket: wrong turn sends error only to sender
 - WebSocket: resign broadcasts `game_over`
+- WebSocket: reconnecting player receives current `game_state` before `player_reconnected` broadcast
 - WebSocket: reconnect broadcasts `player_reconnected`
+- WebSocket: spectator receives `game_state` on connect to active game
+- disconnect timeout broadcasts `game_over` via WebSocket when timer fires
+- disconnect timeout does nothing if player reconnected before expiry
+- `room_created` Redis event creates a new game
+- Redis subscriber ignores non-message events
+- Redis subscriber handles invalid JSON gracefully
+- Redis subscriber ignores unknown events
 
 Current test count:
 
 ```text
-28 passed
-```
-
----
-
-## Development Status
-
-Implemented endpoints:
-
-```text
-GET  /health
-GET  /games/{game_id}
-POST /games/{game_id}/join
-POST /games/{game_id}/move
-GET  /games/{game_id}/legal-moves
-POST /games/{game_id}/resign
-WS   /ws/games/{game_id}
-```
-
-Implemented infrastructure:
-
-```text
-Dockerfile
-docker-compose.yml
-MySQL container
-Redis (shared with room-service)
-Alembic migrations
-pytest test suite
-Redis pub/sub subscriber (room_created)
-Redis pub/sub publisher (game_over, game_abandoned)
-```
-
-Current automated test status:
-
-```text
-28 tests passed
+38 passed
 ```

@@ -85,14 +85,14 @@ def mock_game_service_redis():
 def test_ws_invalid_token_closes_connection():
     http_create_game()
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(f"/ws/games/1?token={INVALID_TOKEN}") as ws:
+        with client.websocket_connect(f"/ws/games/1?token={INVALID_TOKEN}") as _:
             pass
     assert exc_info.value.code == 4001
 
 
 def test_ws_unknown_game_closes_connection():
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(f"/ws/games/999?token={TOKEN1}") as ws:
+        with client.websocket_connect(f"/ws/games/999?token={TOKEN1}") as _:
             pass
     assert exc_info.value.code == 4004
 
@@ -109,7 +109,7 @@ def test_ws_activating_player_receives_game_start():
     p1_exit = threading.Event()
 
     def player1():
-        with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as ws:
+        with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as _:
             p1_connected.set()
             p1_exit.wait(timeout=10)
 

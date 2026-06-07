@@ -73,6 +73,7 @@ routers → services → repositories → models
 
 **`app/models.py`** — SQLAlchemy ORM models
 - `Game` model maps to the `games` table
+- Uses SQLAlchemy 2.0 `Mapped` type annotations with `mapped_column()` — mypy-compatible
 
 **`app/schemas.py`** — Pydantic schemas for request/response serialization
 
@@ -264,8 +265,8 @@ Games are created exclusively via the `room_created` Redis event — there is no
 
 **Server → Client:**
 - `{"type": "game_start", "game": {...}}` — broadcast when second player connects
-- `{"type": "game_state", "game": {...}}` — broadcast after each move
-- `{"type": "game_over", "game": {...}}` — broadcast when game ends
+- `{"type": "game_state", "game": {...}}` — broadcast after each move; also sent personally to spectator on connect and to reconnecting player before `player_reconnected`
+- `{"type": "game_over", "game": {...}}` — broadcast when game ends (checkmate, stalemate, resign, disconnect timeout)
 - `{"type": "legal_moves", "moves": [...]}` — sent only to requester
 - `{"type": "player_disconnected", "color": "white", "reconnect_seconds": 30}` — broadcast on disconnect
 - `{"type": "player_reconnected", "color": "white"}` — broadcast on reconnect
@@ -294,6 +295,9 @@ Games are created exclusively via the `room_created` Redis event — there is no
 **Game logic**
 - Do not bypass the `chess` library for move validation — always use it
 - Do not modify `board_state` directly in the database without going through move validation
+
+**Models**
+- Do not revert `Mapped` annotations back to `Column(...)` style — `Mapped` is required for mypy to type-check `game_service.py` correctly
 
 **Infrastructure**
 - Do not run `alembic upgrade head` automatically on app startup

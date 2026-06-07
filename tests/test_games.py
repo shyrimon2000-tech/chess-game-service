@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.main import app
 from app.database import get_db

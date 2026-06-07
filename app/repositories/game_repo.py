@@ -26,9 +26,6 @@ def get_game_by_id(db: Session, game_id: int) -> Game | None:
     return db.query(Game).filter(Game.id == game_id).first()
 
 
-def get_game_by_room_id(db: Session, room_id: int) -> Game | None:
-    return db.query(Game).filter(Game.room_id == room_id).first()
-
 
 def save_game(db: Session, game: Game) -> Game:
     db.commit()
