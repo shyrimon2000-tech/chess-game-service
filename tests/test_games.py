@@ -234,11 +234,8 @@ def test_disconnect_waiting_game_publishes_abandoned(mock_client):
     assert client.get("/games/1").json()["status"] == "finished"
 
 
-@patch("app.services.game_service.redis_lib.from_url")
+@patch("app.services.game_service._redis")
 def test_disconnect_active_game_sets_redis_key(mock_redis):
-    mock_client = MagicMock()
-    mock_redis.return_value = mock_client
-
     setup_active_game()
     db = TestingSessionLocal()
     try:
@@ -246,14 +243,12 @@ def test_disconnect_active_game_sets_redis_key(mock_redis):
     finally:
         db.close()
 
-    mock_client.set.assert_called_once_with("game:disconnect:1:white", "1", ex=30)
+    mock_redis.set.assert_called_once_with("game:disconnect:1:white", "1", ex=30)
 
 
-@patch("app.services.game_service.redis_lib.from_url")
+@patch("app.services.game_service._redis")
 def test_reconnect_deletes_redis_key(mock_redis):
-    mock_client = MagicMock()
-    mock_client.delete.return_value = 1
-    mock_redis.return_value = mock_client
+    mock_redis.delete.return_value = 1
 
     setup_active_game()
     db = TestingSessionLocal()
@@ -262,4 +257,38 @@ def test_reconnect_deletes_redis_key(mock_redis):
     finally:
         db.close()
 
-    mock_client.delete.assert_called_once_with("game:disconnect:1:white")
+    mock_redis.delete.assert_called_once_with("game:disconnect:1:white")
+
+
+@patch("app.events.publisher._client")
+@patch("app.services.game_service._redis")
+def test_timeout_disconnect_returns_none_if_player_reconnected(mock_redis, mock_publisher):
+    mock_redis.exists.return_value = 0
+
+    setup_active_game()
+    db = TestingSessionLocal()
+    try:
+        result = game_service.timeout_disconnect(db, 1, "white")
+    finally:
+        db.close()
+
+    assert result is None
+    mock_redis.delete.assert_not_called()
+
+
+@patch("app.events.publisher._client")
+@patch("app.services.game_service._redis")
+def test_timeout_disconnect_finishes_game_if_key_exists(mock_redis, mock_publisher):
+    mock_redis.exists.return_value = 1
+
+    setup_active_game()
+    db = TestingSessionLocal()
+    try:
+        result = game_service.timeout_disconnect(db, 1, "white")
+    finally:
+        db.close()
+
+    assert result is not None
+    assert result.status == "finished"
+    assert result.winner == "black"
+    mock_redis.delete.assert_called_once()

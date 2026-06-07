@@ -8,6 +8,8 @@ from app.repositories import game_repo
 
 DISCONNECT_TTL = 30
 
+_redis = redis_lib.from_url(settings.REDIS_URL)
+
 
 def get_game(db: Session, game_id: int):
     game = game_repo.get_game_by_id(db, game_id)
@@ -144,9 +146,8 @@ def handle_disconnect(db: Session, game_id: int, user_id: int):
     else:
         raise ValueError("User is not a player in this game")
 
-    client = redis_lib.from_url(settings.REDIS_URL)
     key = f"game:disconnect:{game_id}:{color}"
-    client.set(key, "1", ex=DISCONNECT_TTL)
+    _redis.set(key, "1", ex=DISCONNECT_TTL)
 
 
 def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
@@ -161,21 +162,19 @@ def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     else:
         raise ValueError("User is not a player in this game")
 
-    client = redis_lib.from_url(settings.REDIS_URL)
     key = f"game:disconnect:{game_id}:{color}"
-    deleted = client.delete(key)
+    deleted = _redis.delete(key)
     return bool(deleted)
 
 
 def timeout_disconnect(db: Session, game_id: int, color: str):
     """Called after disconnect TTL expires. Returns finished game or None if player reconnected."""
-    client = redis_lib.from_url(settings.REDIS_URL)
     key = f"game:disconnect:{game_id}:{color}"
 
-    if not client.exists(key):
+    if not _redis.exists(key):
         return None
 
-    client.delete(key)
+    _redis.delete(key)
 
     game = game_repo.get_game_by_id(db, game_id)
     if game is None or game.status != "active":

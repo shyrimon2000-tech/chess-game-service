@@ -1,3 +1,4 @@
+import asyncio
 import threading
 
 import pytest
@@ -7,7 +8,7 @@ from jose import jwt
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.main import app
 from app.database import Base, get_db
@@ -70,15 +71,13 @@ def reset_state():
 def mock_game_service_redis():
     # Publisher is patched at function level, not via redis.from_url — both patches
     # would target the same attribute on the redis module and the second would win.
-    with patch("app.services.game_service.redis_lib.from_url") as mock_redis, \
+    with patch("app.services.game_service._redis") as mock_redis, \
          patch("app.routers.ws.asyncio.create_task") as mock_task, \
          patch("app.events.publisher._client"):
-        redis_client = MagicMock()
-        redis_client.delete.return_value = 0
-        redis_client.set.return_value = True
-        mock_redis.return_value = redis_client
+        mock_redis.delete.return_value = 0
+        mock_redis.set.return_value = True
         mock_task.side_effect = lambda coro: coro.close()
-        yield redis_client
+        yield mock_redis
 
 
 # --- auth / routing ---
@@ -138,6 +137,7 @@ def test_ws_spectator_can_connect_and_receive_legal_moves():
     http_activate_game()
 
     with client.websocket_connect(f"/ws/games/1?token={TOKEN_SPECTATOR}") as ws:
+        ws.receive_json()  # game_state on connect
         ws.send_json({"type": "legal_moves", "square": "e2"})
         msg = ws.receive_json()
         assert msg["type"] == "legal_moves"
@@ -226,3 +226,49 @@ def test_ws_reconnect_broadcasts_player_reconnected(mock_game_service_redis):
 
     assert msg["type"] == "player_reconnected"
     assert msg["color"] == "white"
+
+
+# --- spectator ---
+
+def test_ws_spectator_receives_game_state_on_connect():
+    http_create_game()
+    http_activate_game()
+
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN_SPECTATOR}") as ws:
+        msg = ws.receive_json()
+
+    assert msg["type"] == "game_state"
+    assert msg["game"]["status"] == "active"
+
+
+# --- _disconnect_timeout ---
+
+def test_disconnect_timeout_broadcasts_game_over_when_timer_fires():
+    from app.routers import ws as ws_module
+
+    mock_game = MagicMock()
+
+    async def _run():
+        with patch("app.routers.ws.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.routers.ws.game_service.timeout_disconnect", return_value=mock_game), \
+             patch("app.routers.ws.SessionLocal"), \
+             patch("app.routers.ws.manager.broadcast", new_callable=AsyncMock) as mock_broadcast, \
+             patch("app.routers.ws._serialize_game", return_value={"id": 1}):
+            await ws_module._disconnect_timeout(1, "white")
+            mock_broadcast.assert_called_once_with(1, {"type": "game_over", "game": {"id": 1}})
+
+    asyncio.run(_run())
+
+
+def test_disconnect_timeout_skips_broadcast_when_player_reconnected():
+    from app.routers import ws as ws_module
+
+    async def _run():
+        with patch("app.routers.ws.asyncio.sleep", new_callable=AsyncMock), \
+             patch("app.routers.ws.game_service.timeout_disconnect", return_value=None), \
+             patch("app.routers.ws.SessionLocal"), \
+             patch("app.routers.ws.manager.broadcast", new_callable=AsyncMock) as mock_broadcast:
+            await ws_module._disconnect_timeout(1, "white")
+            mock_broadcast.assert_not_called()
+
+    asyncio.run(_run())

@@ -94,6 +94,12 @@ async def game_websocket(
                 "color": color,
             })
 
+    if not is_player and game.status == "active":
+        await manager.send_personal(websocket, {
+            "type": "game_state",
+            "game": _serialize_game(game),
+        })
+
     try:
         while True:
             data = await websocket.receive_json()
