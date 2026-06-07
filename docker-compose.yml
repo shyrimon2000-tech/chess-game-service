@@ -29,6 +29,12 @@ services:
     restart: unless-stopped
     networks:
       - chess_game_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   game-service:
     build:
@@ -47,7 +53,7 @@ services:
       game-db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
 
     networks:
       - chess_game_internal
