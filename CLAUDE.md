@@ -21,8 +21,8 @@ The user is learning backend development. Apply these principles in every sessio
 - Tracking board state in FEN notation (using the `chess` Python library)
 - Managing turn order between players
 - Detecting game-over conditions: checkmate, stalemate, resignation
-- Publishing `game_over` events to Redis so room-service can update room status
-- Active game disconnect handling and reconnect timers (planned)
+- Publishing `game_over` and `game_abandoned` events to Redis so room-service can update room status
+- Active game disconnect handling with 30-second reconnect timers
 
 **This service is NOT responsible for:**
 - Creating or closing rooms
@@ -77,8 +77,8 @@ routers → services → repositories → models
 **`app/schemas.py`** — Pydantic schemas for request/response serialization
 
 **`app/events/`** — Redis pub/sub
-- `publisher.py` — publishes `game_over` events to the `game_events` channel
-- `subscriber.py` — planned; will subscribe to events from room-service
+- `publisher.py` — publishes `game_over` and `game_abandoned` to the `game_events` channel
+- `subscriber.py` — subscribes to `room_events`; handles `room_created` by creating a new game with `white_player_id` only
 
 ---
 
@@ -115,7 +115,7 @@ waiting → active → finished
 |---|---|
 | `waiting` | Game created, waiting for second player to connect |
 | `active` | Both players connected, moves are being played |
-| `finished` | Game ended — checkmate, stalemate, or resignation |
+| `finished` | Game ended — checkmate, stalemate, resignation, or disconnect timeout |
 
 ---
 
@@ -159,22 +159,28 @@ Move validation uses the `chess` Python library. Board state is stored as a FEN 
 
 ### Redis Events
 
-When a game ends, `publisher.py` publishes to the `game_events` Redis channel:
+Two channels are used:
+
+**`game_events`** — published by game-service, consumed by room-service:
 
 ```json
-{
-  "event": "game_over",
-  "game_id": 1,
-  "room_id": 42,
-  "winner": "white"
-}
+{ "event": "game_over",     "game_id": 1, "room_id": 42, "winner": "white" }
+{ "event": "game_abandoned", "game_id": 1, "room_id": 42 }
 ```
 
-Room-service subscribes to this channel and updates the room status to `finished`.
+`game_over` fires on checkmate, stalemate, resignation, or disconnect timeout. `game_abandoned` fires when the only player disconnects while the game is still in `waiting` status.
+
+**`room_events`** — published by room-service, consumed by game-service:
+
+```json
+{ "event": "room_created", "room_id": 42, "white_player_id": 7 }
+```
+
+Game-service creates a new game with `white_player_id` only. The second player is assigned as black automatically when they connect via WebSocket (`join_game`).
 
 ### Cross-Service Boundary
 
-Game-service does not manage rooms. It receives a `room_id` when a game is created (room-service calls game-service after both players join) and uses it only for event publishing.
+Game-service does not manage rooms. When room-service opens a new room, it publishes `room_created` to Redis — game-service creates the game in response. Room-service never calls game-service over HTTP.
 
 ---
 
@@ -229,26 +235,44 @@ cp .env.example .env
 | `DATABASE_URL` | Must use `game-db` as hostname when running via Docker Compose |
 | `JWT_SECRET_KEY` | Must match the value used in `chess-auth-service` and `chess-room-service` |
 | `JWT_ALGORITHM` | Must match — default `HS256` |
-| `REDIS_URL` | Required — used by publisher; subscriber not yet active |
+| `REDIS_URL` | Required — used by publisher and subscriber |
 | `MYSQL_*` | Used by the Docker Compose MySQL container |
 
 `JWT_SECRET_KEY` and `JWT_ALGORITHM` are shared across all services. If they differ, token validation will fail with 401.
 
 ---
 
-## In Progress / Not Yet Implemented
+## HTTP API
 
-| Item | Status |
-|---|---|
-| `app/routers/games.py` | Router declared, no endpoints implemented yet |
-| `app/services/game_service.py` | File exists, empty. Move logic not written yet. |
-| `app/repositories/game_repo.py` | File exists, empty. DB queries not written yet. |
-| `app/events/subscriber.py` | File exists, empty. Redis subscriber not implemented. |
-| `tests/test_games.py` | File exists, empty. Tests not written yet. |
-| WebSocket gameplay | Planned. Real-time move exchange between players. |
-| Disconnect / reconnect timers | Planned. Active game disconnect handling. |
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/games/{game_id}` | Get game state |
+| `POST` | `/games/{game_id}/join` | Join a waiting game (assigns black if slot is empty) |
+| `POST` | `/games/{game_id}/move` | Make a move (UCI format, e.g. `e2e4`) |
+| `GET` | `/games/{game_id}/legal-moves?square=e2` | Get legal moves for a square |
+| `POST` | `/games/{game_id}/resign` | Resign the game |
+| `POST` | `/games/{game_id}/disconnect` | Notify server of disconnect (starts 30s timer) |
+| `POST` | `/games/{game_id}/reconnect` | Cancel disconnect timer |
+| `WS` | `/ws/games/{game_id}?token=<jwt>` | Real-time gameplay channel |
 
-Do not document Redis subscriber as working. Do not assume WebSocket is implemented.
+Games are created exclusively via the `room_created` Redis event — there is no `POST /games` endpoint.
+
+## WebSocket Message Types
+
+**Client → Server:**
+- `{"type": "move", "move": "e2e4"}` — make a move
+- `{"type": "legal_moves", "square": "e2"}` — request legal moves
+- `{"type": "resign"}` — resign the game
+
+**Server → Client:**
+- `{"type": "game_start", "game": {...}}` — broadcast when second player connects
+- `{"type": "game_state", "game": {...}}` — broadcast after each move
+- `{"type": "game_over", "game": {...}}` — broadcast when game ends
+- `{"type": "legal_moves", "moves": [...]}` — sent only to requester
+- `{"type": "player_disconnected", "color": "white", "reconnect_seconds": 30}` — broadcast on disconnect
+- `{"type": "player_reconnected", "color": "white"}` — broadcast on reconnect
+- `{"type": "game_abandoned"}` — broadcast when waiting game is abandoned
+- `{"type": "error", "detail": "..."}` — sent only to requester on validation error
 
 ---
 
