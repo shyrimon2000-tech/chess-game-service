@@ -1,0 +1,13 @@
+.venv/
+venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+.idea/
+*.egg-info/
+dist/
+build/
+.DS_Store
+ex.docker-compose.yml

@@ -1,0 +1,167 @@
+import asyncio
+
+import chess
+import redis as redis_lib
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.database import SessionLocal
+from app.events.publisher import publish_game_abandoned, publish_game_over
+from app.repositories import game_repo
+
+DISCONNECT_TTL = 30
+
+
+def create_game(db: Session, room_id: int, white_player_id: int):
+    return game_repo.create_game(db, room_id, white_player_id)
+
+
+def join_game(db: Session, game_id: int, user_id: int):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    if game.status != "waiting":
+        raise ValueError("Game is not waiting for a player")
+    if game.white_player_id == user_id:
+        raise ValueError("You are already in this game as white")
+
+    game.black_player_id = user_id
+    game.status = "active"
+    game.current_turn = "white"
+    return game_repo.save_game(db, game)
+
+
+def make_move(db: Session, game_id: int, user_id: int, move_uci: str):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    if game.status != "active":
+        raise ValueError("Game is not active")
+
+    if game.current_turn == "white" and game.white_player_id != user_id:
+        raise ValueError("Not your turn")
+    if game.current_turn == "black" and game.black_player_id != user_id:
+        raise ValueError("Not your turn")
+
+    board = chess.Board(game.board_state)
+
+    try:
+        move = chess.Move.from_uci(move_uci)
+    except ValueError:
+        raise ValueError("Invalid move format")
+
+    if not board.is_legal(move):
+        raise ValueError("Illegal move")
+
+    board.push(move)
+    game.board_state = board.fen()
+
+    if board.is_checkmate():
+        game.status = "finished"
+        game.winner = game.current_turn
+        game_repo.save_game(db, game)
+        publish_game_over(game.id, game.room_id, game.winner)
+        return game
+
+    if (
+        board.is_stalemate()
+        or board.is_insufficient_material()
+        or board.is_seventyfive_moves()
+        or board.is_fivefold_repetition()
+    ):
+        game.status = "finished"
+        game.winner = "draw"
+        game_repo.save_game(db, game)
+        publish_game_over(game.id, game.room_id, game.winner)
+        return game
+
+    game.current_turn = "black" if game.current_turn == "white" else "white"
+    return game_repo.save_game(db, game)
+
+
+def get_legal_moves(db: Session, game_id: int, square: str) -> list[str]:
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    if game.status != "active":
+        raise ValueError("Game is not active")
+
+    board = chess.Board(game.board_state)
+
+    try:
+        sq = chess.parse_square(square)
+    except ValueError:
+        raise ValueError("Invalid square")
+
+    return [move.uci() for move in board.legal_moves if move.from_square == sq]
+
+
+def handle_disconnect(db: Session, game_id: int, user_id: int):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+
+    if game.status == "waiting":
+        game.status = "finished"
+        game_repo.save_game(db, game)
+        publish_game_abandoned(game.id, game.room_id)
+        return
+
+    if game.status != "active":
+        return
+
+    if game.white_player_id == user_id:
+        color = "white"
+    elif game.black_player_id == user_id:
+        color = "black"
+    else:
+        raise ValueError("User is not a player in this game")
+
+    client = redis_lib.from_url(settings.REDIS_URL)
+    key = f"game:disconnect:{game_id}:{color}"
+    client.set(key, "1", ex=DISCONNECT_TTL)
+
+    asyncio.create_task(_disconnect_timeout(game_id, color))
+
+
+def handle_reconnect(db: Session, game_id: int, user_id: int):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+
+    if game.white_player_id == user_id:
+        color = "white"
+    elif game.black_player_id == user_id:
+        color = "black"
+    else:
+        raise ValueError("User is not a player in this game")
+
+    client = redis_lib.from_url(settings.REDIS_URL)
+    key = f"game:disconnect:{game_id}:{color}"
+    client.delete(key)
+
+
+async def _disconnect_timeout(game_id: int, color: str):
+    await asyncio.sleep(DISCONNECT_TTL)
+
+    client = redis_lib.from_url(settings.REDIS_URL)
+    key = f"game:disconnect:{game_id}:{color}"
+
+    if not client.exists(key):
+        return
+
+    client.delete(key)
+
+    db = SessionLocal()
+    try:
+        game = game_repo.get_game_by_id(db, game_id)
+        if game is None or game.status != "active":
+            return
+
+        winner = "black" if color == "white" else "white"
+        game.status = "finished"
+        game.winner = winner
+        game_repo.save_game(db, game)
+        publish_game_over(game.id, game.room_id, winner)
+    finally:
+        db.close()
