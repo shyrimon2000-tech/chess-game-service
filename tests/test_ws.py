@@ -64,13 +64,12 @@ def reset_state():
 
 @pytest.fixture(autouse=True)
 def mock_game_service_redis():
-    """
-    Патчим Redis и create_task в game_service.
-    handle_disconnect/handle_reconnect вызываются при закрытии WS соединения —
-    без мока падают на отсутствующий Redis.
-    """
+    # Publisher is patched at function level, not via redis.from_url — both patches
+    # would target the same attribute on the redis module and the second would win.
     with patch("app.services.game_service.redis_lib.from_url") as mock_redis, \
-         patch("app.services.game_service.asyncio.create_task") as mock_task:
+         patch("app.services.game_service.asyncio.create_task") as mock_task, \
+         patch("app.events.publisher.publish_game_over"), \
+         patch("app.events.publisher.publish_game_abandoned"):
         redis_client = MagicMock()
         redis_client.delete.return_value = 0
         redis_client.set.return_value = True
@@ -99,12 +98,8 @@ def test_ws_unknown_game_closes_connection():
 # --- game activation ---
 
 def test_ws_activating_player_receives_game_start():
-    """
-    Проверяем только player2 (тот, кто активирует игру через WS).
-    Каждый WS-коннект — свой anyio portal (свой event loop). Broadcast из portal2
-    на player1's socket (portal1) падает тихо. Player2 всегда получает свой broadcast
-    в том же event loop, поэтому его событие проверяем.
-    """
+    # Each WS connection runs in its own anyio portal (separate event loop).
+    # Cross-portal broadcast silently fails, so we only verify the activating player's events.
     http_create_game()
 
     p2_events = []
@@ -136,7 +131,6 @@ def test_ws_activating_player_receives_game_start():
 # --- spectator ---
 
 def test_ws_spectator_can_connect_and_receive_legal_moves():
-    """Зритель подключается к активной игре и может запрашивать допустимые ходы."""
     http_create_game()
     http_activate_game()
 
@@ -150,7 +144,6 @@ def test_ws_spectator_can_connect_and_receive_legal_moves():
 # --- moves ---
 
 def test_ws_move_sender_receives_game_state():
-    """Игрок, сделавший ход, получает обновлённое состояние игры."""
     http_create_game()
     http_activate_game()
 
@@ -186,16 +179,27 @@ def test_ws_wrong_turn_sends_error_only_to_sender():
         assert "turn" in msg["detail"].lower()
 
 
+# --- resign ---
+
+def test_ws_resign_broadcasts_game_over():
+    http_create_game()
+    http_activate_game()
+
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as ws:
+        ws.send_json({"type": "resign"})
+        msg = ws.receive_json()
+
+    assert msg["type"] == "game_over"
+    assert msg["game"]["winner"] == "black"
+    assert msg["game"]["status"] == "finished"
+
+
 # --- reconnect ---
 
 def test_ws_reconnect_broadcasts_player_reconnected(mock_game_service_redis):
-    """
-    Когда игрок подключается к активной игре с существующим disconnect-ключом,
-    остальным участникам отправляется player_reconnected.
-    Тест в single-connection режиме: игрок получает broadcast от собственного handler
-    (один event loop — нет проблемы cross-loop send).
-    """
-    mock_game_service_redis.delete.return_value = 1  # у white был disconnect key
+    # Single-connection test: the reconnecting player receives their own broadcast
+    # (same event loop — no cross-portal send issue).
+    mock_game_service_redis.delete.return_value = 1  # white had an active disconnect key
 
     http_create_game()
     http_activate_game()

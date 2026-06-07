@@ -182,6 +182,45 @@ def test_legal_moves_empty_square_returns_empty():
     assert response.json()["moves"] == []
 
 
+# --- resign ---
+
+@patch("app.events.publisher.redis.from_url")
+def test_resign_game_finishes_game(mock_redis):
+    mock_client = MagicMock()
+    mock_redis.return_value = mock_client
+
+    setup_active_game()
+
+    as_user(1)
+    response = client.post("/games/1/resign")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "finished"
+    assert data["winner"] == "black"
+    mock_client.publish.assert_called_once()
+
+
+@patch("app.events.publisher.redis.from_url")
+def test_resign_game_black_wins_if_white_resigns(mock_redis):
+    mock_redis.return_value = MagicMock()
+    setup_active_game()
+    as_user(2)
+    data = client.post("/games/1/resign").json()
+    assert data["winner"] == "white"
+
+
+def test_resign_game_non_player_rejected():
+    setup_active_game()
+    as_user(3)
+    assert client.post("/games/1/resign").status_code == 400
+
+
+def test_resign_game_not_active_rejected():
+    create_game(room_id=1, white_player_id=1, black_player_id=2)
+    as_user(1)
+    assert client.post("/games/1/resign").status_code == 400
+
+
 # --- disconnect / reconnect ---
 
 @patch("app.events.publisher.redis.from_url")

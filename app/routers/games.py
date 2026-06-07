@@ -75,6 +75,18 @@ def get_legal_moves(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{game_id}/resign", response_model=GameResponse)
+def resign(
+    game_id: int,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return game_service.resign_game(db, game_id, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{game_id}/disconnect")
 def handle_disconnect(
     game_id: int,

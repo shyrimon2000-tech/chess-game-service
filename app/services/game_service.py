@@ -107,6 +107,22 @@ def get_legal_moves(db: Session, game_id: int, square: str) -> list[str]:
     return [move.uci() for move in board.legal_moves if move.from_square == sq]
 
 
+def resign_game(db: Session, game_id: int, user_id: int):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    if game.status != "active":
+        raise ValueError("Game is not active")
+    if user_id not in (game.white_player_id, game.black_player_id):
+        raise ValueError("You are not a player in this game")
+
+    game.winner = "black" if game.white_player_id == user_id else "white"
+    game.status = "finished"
+    game_repo.save_game(db, game)
+    publish_game_over(game.id, game.room_id, game.winner)
+    return game
+
+
 def handle_disconnect(db: Session, game_id: int, user_id: int):
     game = game_repo.get_game_by_id(db, game_id)
     if game is None:

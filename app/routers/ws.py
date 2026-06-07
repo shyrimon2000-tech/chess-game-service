@@ -90,6 +90,16 @@ async def game_websocket(
                 except ValueError as e:
                     await manager.send_personal(websocket, {"type": "error", "detail": str(e)})
 
+            elif msg_type == "resign":
+                try:
+                    game = game_service.resign_game(db, game_id, user_id)
+                    await manager.broadcast(game_id, {
+                        "type": "game_over",
+                        "game": _serialize_game(game),
+                    })
+                except ValueError as e:
+                    await manager.send_personal(websocket, {"type": "error", "detail": str(e)})
+
     except WebSocketDisconnect:
         manager.disconnect(game_id, websocket, user_id if is_player else None)
 
