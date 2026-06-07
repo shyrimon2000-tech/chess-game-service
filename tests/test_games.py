@@ -29,7 +29,7 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-def as_user(user_id: int, role: str = "player"):
+def as_user(user_id: int, role: str = "user"):
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(id=user_id, role=role)
 
 

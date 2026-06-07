@@ -33,14 +33,14 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 SECRET = "change-this-secret-key"
-TOKEN1 = jwt.encode({"sub": "1", "role": "player"}, SECRET, algorithm="HS256")
-TOKEN2 = jwt.encode({"sub": "2", "role": "player"}, SECRET, algorithm="HS256")
-TOKEN_SPECTATOR = jwt.encode({"sub": "99", "role": "player"}, SECRET, algorithm="HS256")
+TOKEN1 = jwt.encode({"sub": "1", "role": "user"}, SECRET, algorithm="HS256")
+TOKEN2 = jwt.encode({"sub": "2", "role": "user"}, SECRET, algorithm="HS256")
+TOKEN_SPECTATOR = jwt.encode({"sub": "99", "role": "user"}, SECRET, algorithm="HS256")
 INVALID_TOKEN = "invalid.token.here"
 
 
 def as_user(user_id: int):
-    app.dependency_overrides[get_current_user] = lambda: CurrentUser(id=user_id, role="player")
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(id=user_id, role="user")
 
 
 def http_create_game(room_id=1, white_id=1, black_id=2):
