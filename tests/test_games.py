@@ -219,6 +219,7 @@ def test_disconnect_active_game_sets_redis_key(mock_redis, mock_create_task):
 @patch("app.services.game_service.redis_lib.from_url")
 def test_reconnect_deletes_redis_key(mock_redis):
     mock_client = MagicMock()
+    mock_client.delete.return_value = 1
     mock_redis.return_value = mock_client
 
     setup_active_game()

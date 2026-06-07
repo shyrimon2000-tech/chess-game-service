@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.events.subscriber import start_subscriber
-from app.routers import games
+from app.routers import games, ws
 
 
 @asynccontextmanager
@@ -34,3 +34,4 @@ def health_check():
 
 
 app.include_router(games.router)
+app.include_router(ws.router)

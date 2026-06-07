@@ -135,7 +135,7 @@ def handle_disconnect(db: Session, game_id: int, user_id: int):
     asyncio.create_task(_disconnect_timeout(game_id, color))
 
 
-def handle_reconnect(db: Session, game_id: int, user_id: int):
+def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     game = game_repo.get_game_by_id(db, game_id)
     if game is None:
         raise ValueError("Game not found")
@@ -149,7 +149,8 @@ def handle_reconnect(db: Session, game_id: int, user_id: int):
 
     client = redis_lib.from_url(settings.REDIS_URL)
     key = f"game:disconnect:{game_id}:{color}"
-    client.delete(key)
+    deleted = client.delete(key)
+    return bool(deleted)
 
 
 async def _disconnect_timeout(game_id: int, color: str):
