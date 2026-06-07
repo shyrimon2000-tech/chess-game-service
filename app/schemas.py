@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 class CreateGameRequest(BaseModel):
     room_id: int
     white_player_id: int
+    black_player_id: int | None = None
 
 
 class MakeMoveRequest(BaseModel):

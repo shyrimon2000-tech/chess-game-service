@@ -19,7 +19,7 @@ def create_game(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
-        return game_service.create_game(db, body.room_id, body.white_player_id)
+        return game_service.create_game(db, body.room_id, body.white_player_id, body.black_player_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

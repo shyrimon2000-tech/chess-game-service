@@ -19,8 +19,13 @@ def get_game(db: Session, game_id: int):
     return game
 
 
-def create_game(db: Session, room_id: int, white_player_id: int):
-    return game_repo.create_game(db, room_id, white_player_id)
+def create_game(
+    db: Session,
+    room_id: int,
+    white_player_id: int,
+    black_player_id: int | None = None,
+):
+    return game_repo.create_game(db, room_id, white_player_id, black_player_id)
 
 
 def join_game(db: Session, game_id: int, user_id: int):
@@ -29,10 +34,9 @@ def join_game(db: Session, game_id: int, user_id: int):
         raise ValueError("Game not found")
     if game.status != "waiting":
         raise ValueError("Game is not waiting for a player")
-    if game.white_player_id == user_id:
-        raise ValueError("You are already in this game as white")
+    if user_id not in (game.white_player_id, game.black_player_id):
+        raise ValueError("You are not a player in this game")
 
-    game.black_player_id = user_id
     game.status = "active"
     game.current_turn = "white"
     return game_repo.save_game(db, game)

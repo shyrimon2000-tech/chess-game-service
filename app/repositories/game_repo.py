@@ -3,10 +3,16 @@ from sqlalchemy.orm import Session
 from app.models import Game, INITIAL_FEN
 
 
-def create_game(db: Session, room_id: int, white_player_id: int) -> Game:
+def create_game(
+    db: Session,
+    room_id: int,
+    white_player_id: int,
+    black_player_id: int | None = None,
+) -> Game:
     game = Game(
         room_id=room_id,
         white_player_id=white_player_id,
+        black_player_id=black_player_id,
         status="waiting",
         board_state=INITIAL_FEN,
     )
