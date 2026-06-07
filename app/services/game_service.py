@@ -1,19 +1,30 @@
-import asyncio
-
 import chess
 import redis as redis_lib
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import SessionLocal
 from app.events.publisher import publish_game_abandoned, publish_game_over
 from app.repositories import game_repo
 
 DISCONNECT_TTL = 30
 
+_redis = redis_lib.from_url(settings.REDIS_URL)
 
-def create_game(db: Session, room_id: int, white_player_id: int):
-    return game_repo.create_game(db, room_id, white_player_id)
+
+def get_game(db: Session, game_id: int):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    return game
+
+
+def create_game(
+    db: Session,
+    room_id: int,
+    white_player_id: int,
+    black_player_id: int | None = None,
+):
+    return game_repo.create_game(db, room_id, white_player_id, black_player_id)
 
 
 def join_game(db: Session, game_id: int, user_id: int):
@@ -22,10 +33,12 @@ def join_game(db: Session, game_id: int, user_id: int):
         raise ValueError("Game not found")
     if game.status != "waiting":
         raise ValueError("Game is not waiting for a player")
-    if game.white_player_id == user_id:
-        raise ValueError("You are already in this game as white")
 
-    game.black_player_id = user_id
+    if game.black_player_id is None and user_id != game.white_player_id:
+        game.black_player_id = user_id
+    elif user_id not in (game.white_player_id, game.black_player_id):
+        raise ValueError("You are not a player in this game")
+
     game.status = "active"
     game.current_turn = "white"
     return game_repo.save_game(db, game)
@@ -96,6 +109,22 @@ def get_legal_moves(db: Session, game_id: int, square: str) -> list[str]:
     return [move.uci() for move in board.legal_moves if move.from_square == sq]
 
 
+def resign_game(db: Session, game_id: int, user_id: int):
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None:
+        raise ValueError("Game not found")
+    if game.status != "active":
+        raise ValueError("Game is not active")
+    if user_id not in (game.white_player_id, game.black_player_id):
+        raise ValueError("You are not a player in this game")
+
+    game.winner = "black" if game.white_player_id == user_id else "white"
+    game.status = "finished"
+    game_repo.save_game(db, game)
+    publish_game_over(game.id, game.room_id, game.winner)
+    return game
+
+
 def handle_disconnect(db: Session, game_id: int, user_id: int):
     game = game_repo.get_game_by_id(db, game_id)
     if game is None:
@@ -117,14 +146,11 @@ def handle_disconnect(db: Session, game_id: int, user_id: int):
     else:
         raise ValueError("User is not a player in this game")
 
-    client = redis_lib.from_url(settings.REDIS_URL)
     key = f"game:disconnect:{game_id}:{color}"
-    client.set(key, "1", ex=DISCONNECT_TTL)
-
-    asyncio.create_task(_disconnect_timeout(game_id, color))
+    _redis.set(key, "1", ex=DISCONNECT_TTL)
 
 
-def handle_reconnect(db: Session, game_id: int, user_id: int):
+def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     game = game_repo.get_game_by_id(db, game_id)
     if game is None:
         raise ValueError("Game not found")
@@ -136,32 +162,27 @@ def handle_reconnect(db: Session, game_id: int, user_id: int):
     else:
         raise ValueError("User is not a player in this game")
 
-    client = redis_lib.from_url(settings.REDIS_URL)
     key = f"game:disconnect:{game_id}:{color}"
-    client.delete(key)
+    deleted = _redis.delete(key)
+    return bool(deleted)
 
 
-async def _disconnect_timeout(game_id: int, color: str):
-    await asyncio.sleep(DISCONNECT_TTL)
-
-    client = redis_lib.from_url(settings.REDIS_URL)
+def timeout_disconnect(db: Session, game_id: int, color: str):
+    """Called after disconnect TTL expires. Returns finished game or None if player reconnected."""
     key = f"game:disconnect:{game_id}:{color}"
 
-    if not client.exists(key):
-        return
+    if not _redis.exists(key):
+        return None
 
-    client.delete(key)
+    _redis.delete(key)
 
-    db = SessionLocal()
-    try:
-        game = game_repo.get_game_by_id(db, game_id)
-        if game is None or game.status != "active":
-            return
+    game = game_repo.get_game_by_id(db, game_id)
+    if game is None or game.status != "active":
+        return None
 
-        winner = "black" if color == "white" else "white"
-        game.status = "finished"
-        game.winner = winner
-        game_repo.save_game(db, game)
-        publish_game_over(game.id, game.room_id, winner)
-    finally:
-        db.close()
+    winner = "black" if color == "white" else "white"
+    game.status = "finished"
+    game.winner = winner
+    game_repo.save_game(db, game)
+    publish_game_over(game.id, game.room_id, winner)
+    return game
