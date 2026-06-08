@@ -13,12 +13,12 @@ from app.services import game_service
 router = APIRouter()
 
 
-async def _disconnect_timeout(game_id: int, color: str):
+async def _disconnect_timeout(game_id: int, color: str, disconnect_ts: int):
     await asyncio.sleep(game_service.DISCONNECT_TTL)
 
     db = SessionLocal()
     try:
-        game = game_service.timeout_disconnect(db, game_id, color)
+        game = game_service.timeout_disconnect(db, game_id, color, disconnect_ts)
         if game is not None:
             await manager.broadcast(game_id, {
                 "type": "game_over",
@@ -93,6 +93,12 @@ async def game_websocket(
                 "type": "player_reconnected",
                 "color": color,
             })
+        else:
+            # Fresh connection to an already-active game — send current state
+            await manager.send_personal(websocket, {
+                "type": "game_state",
+                "game": _serialize_game(game),
+            })
 
     if not is_player and game.status == "active":
         await manager.send_personal(websocket, {
@@ -141,13 +147,14 @@ async def game_websocket(
 
                 if current_game.status == "active":
                     color = "white" if current_game.white_player_id == user_id else "black"
-                    game_service.handle_disconnect(db, game_id, user_id)
+                    disconnect_ts = game_service.handle_disconnect(db, game_id, user_id)
                     await manager.broadcast(game_id, {
                         "type": "player_disconnected",
                         "color": color,
-                        "reconnect_seconds": 30,
+                        "timeout_seconds": game_service.DISCONNECT_TTL,
                     })
-                    asyncio.create_task(_disconnect_timeout(game_id, color))
+                    if disconnect_ts is not None:
+                        asyncio.create_task(_disconnect_timeout(game_id, color, disconnect_ts))
                 elif current_game.status == "waiting":
                     game_service.handle_disconnect(db, game_id, user_id)
                     await manager.broadcast(game_id, {"type": "game_abandoned"})

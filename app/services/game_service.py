@@ -1,5 +1,6 @@
 import chess
 import redis as redis_lib
+import time
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -135,7 +136,8 @@ def resign_game(db: Session, game_id: int, user_id: int):
     return game
 
 
-def handle_disconnect(db: Session, game_id: int, user_id: int):
+def handle_disconnect(db: Session, game_id: int, user_id: int) -> int | None:
+    """Returns disconnect timestamp (used to detect stale timeout tasks), or None for waiting games."""
     game = game_repo.get_game_by_id(db, game_id)
     if game is None:
         raise ValueError("Game not found")
@@ -144,10 +146,10 @@ def handle_disconnect(db: Session, game_id: int, user_id: int):
         game.status = "finished"
         game_repo.save_game(db, game)
         publish_game_abandoned(game.id, game.room_id)
-        return
+        return None
 
     if game.status != "active":
-        return
+        return None
 
     if game.white_player_id == user_id:
         color = "white"
@@ -156,8 +158,10 @@ def handle_disconnect(db: Session, game_id: int, user_id: int):
     else:
         raise ValueError("User is not a player in this game")
 
+    disconnect_ts = int(time.time())
     key = f"game:disconnect:{game_id}:{color}"
-    _redis.set(key, "1", ex=DISCONNECT_TTL)
+    _redis.set(key, str(disconnect_ts), ex=DISCONNECT_TTL)
+    return disconnect_ts
 
 
 def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
@@ -177,11 +181,16 @@ def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     return bool(deleted)
 
 
-def timeout_disconnect(db: Session, game_id: int, color: str):
-    """Called after disconnect TTL expires. Returns finished game or None if player reconnected."""
+def timeout_disconnect(db: Session, game_id: int, color: str, expected_ts: int):
+    """Called after disconnect TTL expires. Returns finished game or None if reconnected/re-disconnected."""
     key = f"game:disconnect:{game_id}:{color}"
 
-    if not _redis.exists(key):
+    stored = _redis.get(key)
+    if stored is None:
+        return None
+
+    # Stale task: player reconnected then disconnected again — stored ts is newer
+    if int(stored) != expected_ts:
         return None
 
     _redis.delete(key)
