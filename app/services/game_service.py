@@ -27,6 +27,16 @@ def create_game(
     return game_repo.create_game(db, room_id, white_player_id, black_player_id)
 
 
+def activate_game(db: Session, room_id: int, black_player_id: int):
+    game = game_repo.get_game_by_room_id(db, room_id)
+    if game is None:
+        raise ValueError(f"Game not found for room {room_id}")
+    game.black_player_id = black_player_id
+    game.status = "active"
+    game.current_turn = "white"
+    return game_repo.save_game(db, game)
+
+
 def join_game(db: Session, game_id: int, user_id: int):
     game = game_repo.get_game_by_id(db, game_id)
     if game is None:

@@ -7,6 +7,7 @@ import redis
 
 from app.config import settings
 from app.database import SessionLocal
+from app.events.publisher import publish_game_created
 from app.services import game_service
 
 logger = logging.getLogger(__name__)
@@ -24,16 +25,33 @@ def _handle_message(message):
         logger.error("Failed to parse room event: %s", message)
         return
 
-    if data.get("event") == "room_created":
+    event = data.get("event")
+
+    if event == "room_created":
         db = SessionLocal()
         try:
-            game_service.create_game(
+            game = game_service.create_game(
                 db,
                 room_id=data["room_id"],
                 white_player_id=data["white_player_id"],
             )
+            publish_game_created(game.id, game.room_id)
         except Exception:
             logger.exception("Failed to create game for room %s", data.get("room_id"))
+        finally:
+            db.close()
+
+    elif event == "room_activated":
+        db = SessionLocal()
+        try:
+            game = game_service.activate_game(
+                db,
+                room_id=data["room_id"],
+                black_player_id=data["black_player_id"],
+            )
+            publish_game_created(game.id, game.room_id)
+        except Exception:
+            logger.exception("Failed to activate game for room %s", data.get("room_id"))
         finally:
             db.close()
 
