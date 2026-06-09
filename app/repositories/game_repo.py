@@ -1,3 +1,4 @@
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.models import Game, INITIAL_FEN
@@ -14,6 +15,7 @@ def create_game(
         white_player_id=white_player_id,
         black_player_id=black_player_id,
         status="waiting",
+        current_turn="white",
         board_state=INITIAL_FEN,
     )
     db.add(game)
@@ -26,8 +28,19 @@ def get_game_by_id(db: Session, game_id: int) -> Game | None:
     return db.query(Game).filter(Game.id == game_id).first()
 
 
+def get_game_by_room_id(db: Session, room_id: int) -> Game | None:
+    return db.query(Game).filter(Game.room_id == room_id).first()
+
+
 
 def save_game(db: Session, game: Game) -> Game:
     db.commit()
     db.refresh(game)
     return game
+
+
+def delete_game(db: Session, game: Game) -> None:
+    game_id = game.id
+    db.expunge(game)  # detach cleanly so attributes remain accessible after deletion
+    db.execute(delete(Game).where(Game.id == game_id))
+    db.commit()

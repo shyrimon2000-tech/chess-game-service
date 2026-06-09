@@ -78,8 +78,8 @@ routers → services → repositories → models
 **`app/schemas.py`** — Pydantic schemas for request/response serialization
 
 **`app/events/`** — Redis pub/sub
-- `publisher.py` — publishes `game_over` and `game_abandoned` to the `game_events` channel
-- `subscriber.py` — subscribes to `room_events`; handles `room_created` by creating a new game with `white_player_id` only
+- `publisher.py` — publishes `game_over`, `game_abandoned`, and `game_created` to the `game_events` channel
+- `subscriber.py` — subscribes to `room_events`; handles `room_created` by creating a new game with `white_player_id` only; handles `room_activated` by setting `black_player_id`, activating the game, and broadcasting `game_start` to all WS clients
 
 ---
 
@@ -109,14 +109,15 @@ Initial FEN: `rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1`
 ## Game Status Lifecycle
 
 ```
-waiting → active → finished
+waiting → active → [deleted]
 ```
 
 | Status | Meaning |
 |---|---|
 | `waiting` | Game created, waiting for second player to connect |
 | `active` | Both players connected, moves are being played |
-| `finished` | Game ended — checkmate, stalemate, resignation, or disconnect timeout |
+
+Games are **deleted from the database** when they end — there is no `finished` status. Before deletion, `db.expunge(game)` is called so the Python object remains usable for the final WS broadcast.
 
 ---
 
@@ -174,10 +175,13 @@ Two channels are used:
 **`room_events`** — published by room-service, consumed by game-service:
 
 ```json
-{ "event": "room_created", "room_id": 42, "white_player_id": 7 }
+{ "event": "room_created",   "room_id": 42, "white_player_id": 7 }
+{ "event": "room_activated", "room_id": 42, "white_player_id": 7, "black_player_id": 12 }
 ```
 
-Game-service creates a new game with `white_player_id` only. The second player is assigned as black automatically when they connect via WebSocket (`join_game`).
+`room_created` — game-service creates a new game (`status=waiting`, `white_player_id` set, `black_player_id` null), then publishes `game_created` back so room-service can store the `game_id`.
+
+`room_activated` — game-service sets `black_player_id`, changes status to `active`, and broadcasts `game_start` to all connected WS clients for that game.
 
 ### Cross-Service Boundary
 
@@ -299,6 +303,44 @@ Games are created exclusively via the `room_created` Redis event — there is no
 **Models**
 - Do not revert `Mapped` annotations back to `Column(...)` style — `Mapped` is required for mypy to type-check `game_service.py` correctly
 
+**Game lifecycle**
+- Do not mark games as `finished` — games are **deleted** from the database on game end
+- Always call `db.expunge(game)` before deleting so the object stays usable for the final WS broadcast
+
 **Infrastructure**
 - Do not run `alembic upgrade head` automatically on app startup
 - Do not expose the MySQL container port to the host unnecessarily
+
+---
+
+## Bug Fixes (June 2026)
+
+Documented so these issues are not re-introduced.
+
+### 1. `game_abandoned` false positive on waiting games
+**Problem:** `is_player` check in `ws.py` evaluated to `True` for any user connecting to a waiting game (because `black_player_id` was `None`, and `user_id in (white_player_id, None)` behaved unexpectedly). This caused `game_abandoned` to fire when white connected to a waiting game.
+**Fix:** Explicit `None` guard added — `is_player = user_id in (game.white_player_id, game.black_player_id) and game.black_player_id is not None` (or equivalent check).
+
+### 2. White player not notified on game start
+**Problem:** When the second player joined and `room_activated` was processed, game-service called `send_personal(game_state)` only to the joining player. White was already connected but never received a signal that the game started.
+**Fix:** Changed to `broadcast(game_start)` so all connected clients (including white who was waiting) receive the activation signal.
+
+### 3. `current_turn` missing on game creation
+**Problem:** `game_repo.create_game()` did not set `current_turn`, so the field was `None` in the database. The frontend read `null` and could not determine whose turn it was.
+**Fix:** `create_game()` now sets `current_turn = "white"` on creation.
+
+### 4. Game record deleted before final WS broadcast
+**Problem:** On game end (resign, checkmate, timeout), the game row was deleted from the database before the `game_over` WS message was built and sent. SQLAlchemy's session expiration caused attribute access on the deleted object to raise `DetachedInstanceError`.
+**Fix:** `db.expunge(game)` is called before `db.delete(game)` — the object is detached from the session but its attributes remain accessible for serialization.
+
+### 5. Last-move highlight not sent to opponent
+**Problem:** After a move, the opponent received a `game_state` WS message but it did not include which move was just played. The frontend had no way to highlight the last move on the opponent's board.
+**Fix:** Last move is stored in Redis as `game:last_move:{game_id}` after each move. It is included in `game_state` and `game_over` broadcasts, and in personal `game_state` messages sent to reconnecting players and spectators.
+
+### 6. Stale REPEATABLE READ cache after WS reconnect
+**Problem:** MySQL's default `REPEATABLE READ` isolation level caused SQLAlchemy to return a cached (stale) snapshot of the game row for the entire duration of a WS connection's transaction. Reconnecting players saw the board state from when they first connected, not the current state.
+**Fix:** `db.rollback()` is called at the start of each WS message handler to force a fresh read from the database.
+
+### 7. Stale disconnect task on rapid reconnect
+**Problem:** If a player disconnected and reconnected within the 30-second window, the old abandon timer kept running. When it expired it broadcast `game_abandoned` even though the player was back.
+**Fix:** The disconnect task is tracked per-connection and cancelled on reconnect before starting any new timer.

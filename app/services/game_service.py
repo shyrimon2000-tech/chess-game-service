@@ -1,5 +1,7 @@
 import chess
 import redis as redis_lib
+import time
+from typing import cast
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -25,6 +27,16 @@ def create_game(
     black_player_id: int | None = None,
 ):
     return game_repo.create_game(db, room_id, white_player_id, black_player_id)
+
+
+def activate_game(db: Session, room_id: int, black_player_id: int):
+    game = game_repo.get_game_by_room_id(db, room_id)
+    if game is None:
+        raise ValueError(f"Game not found for room {room_id}")
+    game.black_player_id = black_player_id
+    game.status = "active"
+    game.current_turn = "white"
+    return game_repo.save_game(db, game)
 
 
 def join_game(db: Session, game_id: int, user_id: int):
@@ -72,7 +84,7 @@ def make_move(db: Session, game_id: int, user_id: int, move_uci: str):
     if board.is_checkmate():
         game.status = "finished"
         game.winner = game.current_turn
-        game_repo.save_game(db, game)
+        game_repo.delete_game(db, game)
         publish_game_over(game.id, game.room_id, game.winner)
         return game
 
@@ -84,7 +96,7 @@ def make_move(db: Session, game_id: int, user_id: int, move_uci: str):
     ):
         game.status = "finished"
         game.winner = "draw"
-        game_repo.save_game(db, game)
+        game_repo.delete_game(db, game)
         publish_game_over(game.id, game.room_id, game.winner)
         return game
 
@@ -120,24 +132,24 @@ def resign_game(db: Session, game_id: int, user_id: int):
 
     game.winner = "black" if game.white_player_id == user_id else "white"
     game.status = "finished"
-    game_repo.save_game(db, game)
+    game_repo.delete_game(db, game)
     publish_game_over(game.id, game.room_id, game.winner)
     return game
 
 
-def handle_disconnect(db: Session, game_id: int, user_id: int):
+def handle_disconnect(db: Session, game_id: int, user_id: int) -> int | None:
+    """Returns disconnect timestamp (used to detect stale timeout tasks), or None for waiting games."""
     game = game_repo.get_game_by_id(db, game_id)
     if game is None:
         raise ValueError("Game not found")
 
     if game.status == "waiting":
-        game.status = "finished"
-        game_repo.save_game(db, game)
+        game_repo.delete_game(db, game)
         publish_game_abandoned(game.id, game.room_id)
-        return
+        return None
 
     if game.status != "active":
-        return
+        return None
 
     if game.white_player_id == user_id:
         color = "white"
@@ -146,8 +158,10 @@ def handle_disconnect(db: Session, game_id: int, user_id: int):
     else:
         raise ValueError("User is not a player in this game")
 
+    disconnect_ts = int(time.time())
     key = f"game:disconnect:{game_id}:{color}"
-    _redis.set(key, "1", ex=DISCONNECT_TTL)
+    _redis.set(key, str(disconnect_ts), ex=DISCONNECT_TTL)
+    return disconnect_ts
 
 
 def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
@@ -167,11 +181,25 @@ def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     return bool(deleted)
 
 
-def timeout_disconnect(db: Session, game_id: int, color: str):
-    """Called after disconnect TTL expires. Returns finished game or None if player reconnected."""
+def set_last_move(game_id: int, move: str) -> None:
+    _redis.set(f"game:last_move:{game_id}", move)
+
+
+def get_last_move(game_id: int) -> str | None:
+    val = cast(bytes | None, _redis.get(f"game:last_move:{game_id}"))
+    return val.decode() if val else None
+
+
+def timeout_disconnect(db: Session, game_id: int, color: str, expected_ts: int):
+    """Called after disconnect TTL expires. Returns finished game or None if reconnected/re-disconnected."""
     key = f"game:disconnect:{game_id}:{color}"
 
-    if not _redis.exists(key):
+    stored = cast(bytes | None, _redis.get(key))
+    if stored is None:
+        return None
+
+    # Stale task: player reconnected then disconnected again — stored ts is newer
+    if int(stored) != expected_ts:
         return None
 
     _redis.delete(key)
@@ -183,6 +211,6 @@ def timeout_disconnect(db: Session, game_id: int, color: str):
     winner = "black" if color == "white" else "white"
     game.status = "finished"
     game.winner = winner
-    game_repo.save_game(db, game)
+    game_repo.delete_game(db, game)
     publish_game_over(game.id, game.room_id, winner)
     return game
