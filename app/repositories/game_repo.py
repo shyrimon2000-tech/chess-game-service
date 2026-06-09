@@ -1,3 +1,4 @@
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.models import Game, INITIAL_FEN
@@ -36,3 +37,10 @@ def save_game(db: Session, game: Game) -> Game:
     db.commit()
     db.refresh(game)
     return game
+
+
+def delete_game(db: Session, game: Game) -> None:
+    game_id = game.id
+    db.expunge(game)  # detach cleanly so attributes remain accessible after deletion
+    db.execute(delete(Game).where(Game.id == game_id))
+    db.commit()

@@ -83,7 +83,7 @@ def make_move(db: Session, game_id: int, user_id: int, move_uci: str):
     if board.is_checkmate():
         game.status = "finished"
         game.winner = game.current_turn
-        game_repo.save_game(db, game)
+        game_repo.delete_game(db, game)
         publish_game_over(game.id, game.room_id, game.winner)
         return game
 
@@ -95,7 +95,7 @@ def make_move(db: Session, game_id: int, user_id: int, move_uci: str):
     ):
         game.status = "finished"
         game.winner = "draw"
-        game_repo.save_game(db, game)
+        game_repo.delete_game(db, game)
         publish_game_over(game.id, game.room_id, game.winner)
         return game
 
@@ -131,7 +131,7 @@ def resign_game(db: Session, game_id: int, user_id: int):
 
     game.winner = "black" if game.white_player_id == user_id else "white"
     game.status = "finished"
-    game_repo.save_game(db, game)
+    game_repo.delete_game(db, game)
     publish_game_over(game.id, game.room_id, game.winner)
     return game
 
@@ -143,8 +143,7 @@ def handle_disconnect(db: Session, game_id: int, user_id: int) -> int | None:
         raise ValueError("Game not found")
 
     if game.status == "waiting":
-        game.status = "finished"
-        game_repo.save_game(db, game)
+        game_repo.delete_game(db, game)
         publish_game_abandoned(game.id, game.room_id)
         return None
 
@@ -211,6 +210,6 @@ def timeout_disconnect(db: Session, game_id: int, color: str, expected_ts: int):
     winner = "black" if color == "white" else "white"
     game.status = "finished"
     game.winner = winner
-    game_repo.save_game(db, game)
+    game_repo.delete_game(db, game)
     publish_game_over(game.id, game.room_id, winner)
     return game
