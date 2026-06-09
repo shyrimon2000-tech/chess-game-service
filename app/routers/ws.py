@@ -68,9 +68,11 @@ async def game_websocket(
         was_disconnected = game_service.handle_reconnect(db, game_id, user_id)
         if was_disconnected:
             color = "white" if game.white_player_id == user_id else "black"
+            last_move = game_service.get_last_move(game_id)
             await manager.send_personal(websocket, {
                 "type": "game_state",
                 "game": _serialize_game(game),
+                **({"last_move": last_move} if last_move else {}),
             })
             await manager.broadcast(game_id, {
                 "type": "player_reconnected",
@@ -83,9 +85,11 @@ async def game_websocket(
             })
 
     if not is_player and game.status == "active":
+        last_move = game_service.get_last_move(game_id)
         await manager.send_personal(websocket, {
             "type": "game_state",
             "game": _serialize_game(game),
+            **({"last_move": last_move} if last_move else {}),
         })
 
     try:
@@ -96,10 +100,13 @@ async def game_websocket(
 
             if msg_type == "move":
                 try:
-                    game = game_service.make_move(db, game_id, user_id, data["move"])
+                    move = data["move"]
+                    game = game_service.make_move(db, game_id, user_id, move)
+                    game_service.set_last_move(game_id, move)
                     await manager.broadcast(game_id, {
                         "type": "game_over" if game.status == "finished" else "game_state",
                         "game": _serialize_game(game),
+                        "last_move": move,
                     })
                 except ValueError as e:
                     await manager.send_personal(websocket, {"type": "error", "detail": str(e)})

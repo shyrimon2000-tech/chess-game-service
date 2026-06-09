@@ -181,6 +181,15 @@ def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
     return bool(deleted)
 
 
+def set_last_move(game_id: int, move: str) -> None:
+    _redis.set(f"game:last_move:{game_id}", move)
+
+
+def get_last_move(game_id: int) -> str | None:
+    val = _redis.get(f"game:last_move:{game_id}")
+    return val.decode() if val else None
+
+
 def timeout_disconnect(db: Session, game_id: int, color: str, expected_ts: int):
     """Called after disconnect TTL expires. Returns finished game or None if reconnected/re-disconnected."""
     key = f"game:disconnect:{game_id}:{color}"
