@@ -92,6 +92,7 @@ async def game_websocket(
         while True:
             data = await websocket.receive_json()
             msg_type = data.get("type")
+            db.rollback()  # close any open read-only txn so next query sees latest committed data
 
             if msg_type == "move":
                 try:
