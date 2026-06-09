@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from app.main import app
 from app.database import get_db
@@ -80,7 +80,7 @@ def test_create_game_returns_correct_fields():
     assert game.status == "waiting"
     assert game.board_state == INITIAL_FEN
     assert game.black_player_id is None
-    assert game.current_turn is None
+    assert game.current_turn == "white"
 
 
 # --- join_game ---
@@ -152,10 +152,9 @@ def test_checkmate_finishes_game(mock_client):
     make_move(1, 1, "f2f3")
     make_move(1, 2, "e7e5")
     make_move(1, 1, "g2g4")
-    make_move(1, 2, "d8h4")
+    response = make_move(1, 2, "d8h4")
 
-    as_user(1)
-    data = client.get("/games/1").json()
+    data = response.json()
     assert data["status"] == "finished"
     assert data["winner"] == "black"
     mock_client.publish.assert_called_once()
@@ -231,7 +230,7 @@ def test_disconnect_waiting_game_publishes_abandoned(mock_client):
     assert "game_abandoned" in payload
 
     as_user(1)
-    assert client.get("/games/1").json()["status"] == "finished"
+    assert client.get("/games/1").status_code == 404
 
 
 @patch("app.services.game_service._redis")
@@ -243,7 +242,7 @@ def test_disconnect_active_game_sets_redis_key(mock_redis):
     finally:
         db.close()
 
-    mock_redis.set.assert_called_once_with("game:disconnect:1:white", "1", ex=30)
+    mock_redis.set.assert_called_once_with("game:disconnect:1:white", ANY, ex=30)
 
 
 @patch("app.services.game_service._redis")
@@ -263,12 +262,12 @@ def test_reconnect_deletes_redis_key(mock_redis):
 @patch("app.events.publisher._client")
 @patch("app.services.game_service._redis")
 def test_timeout_disconnect_returns_none_if_player_reconnected(mock_redis, mock_publisher):
-    mock_redis.exists.return_value = 0
+    mock_redis.get.return_value = None  # key deleted — player reconnected
 
     setup_active_game()
     db = TestingSessionLocal()
     try:
-        result = game_service.timeout_disconnect(db, 1, "white")
+        result = game_service.timeout_disconnect(db, 1, "white", expected_ts=123)
     finally:
         db.close()
 
@@ -279,12 +278,12 @@ def test_timeout_disconnect_returns_none_if_player_reconnected(mock_redis, mock_
 @patch("app.events.publisher._client")
 @patch("app.services.game_service._redis")
 def test_timeout_disconnect_finishes_game_if_key_exists(mock_redis, mock_publisher):
-    mock_redis.exists.return_value = 1
+    mock_redis.get.return_value = b"12345"  # key present, timestamp matches
 
     setup_active_game()
     db = TestingSessionLocal()
     try:
-        result = game_service.timeout_disconnect(db, 1, "white")
+        result = game_service.timeout_disconnect(db, 1, "white", expected_ts=12345)
     finally:
         db.close()
 
