@@ -14,6 +14,7 @@ def create_game(
         white_player_id=white_player_id,
         black_player_id=black_player_id,
         status="waiting",
+        current_turn="white",
         board_state=INITIAL_FEN,
     )
     db.add(game)

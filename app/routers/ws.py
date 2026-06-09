@@ -61,27 +61,10 @@ async def game_websocket(
         await websocket.close(code=4004)
         return
 
-    is_player = (
-        user_id in (game.white_player_id, game.black_player_id)
-        or (game.black_player_id is None and user_id != game.white_player_id and game.status == "waiting")
-    )
+    is_player = user_id in (game.white_player_id, game.black_player_id)
     await manager.connect(game_id, websocket, user_id if is_player else None)
 
-    just_activated = False
-
-    if is_player and game.status == "waiting":
-        if manager.connected_player_count(game_id) == 2:
-            try:
-                game = game_service.join_game(db, game_id, user_id)
-                just_activated = True
-                await manager.broadcast(game_id, {
-                    "type": "game_start",
-                    "game": _serialize_game(game),
-                })
-            except ValueError as e:
-                await manager.send_personal(websocket, {"type": "error", "detail": str(e)})
-
-    if is_player and game.status == "active" and not just_activated:
+    if is_player and game.status == "active":
         was_disconnected = game_service.handle_reconnect(db, game_id, user_id)
         if was_disconnected:
             color = "white" if game.white_player_id == user_id else "black"
@@ -94,9 +77,8 @@ async def game_websocket(
                 "color": color,
             })
         else:
-            # Fresh connection to an already-active game — send current state
-            await manager.send_personal(websocket, {
-                "type": "game_state",
+            await manager.broadcast(game_id, {
+                "type": "game_start",
                 "game": _serialize_game(game),
             })
 

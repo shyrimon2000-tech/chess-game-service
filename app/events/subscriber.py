@@ -44,12 +44,11 @@ def _handle_message(message):
     elif event == "room_activated":
         db = SessionLocal()
         try:
-            game = game_service.activate_game(
+            game_service.activate_game(
                 db,
                 room_id=data["room_id"],
                 black_player_id=data["black_player_id"],
             )
-            publish_game_created(game.id, game.room_id)
         except Exception:
             logger.exception("Failed to activate game for room %s", data.get("room_id"))
         finally:
