@@ -1,6 +1,7 @@
 import chess
 import redis as redis_lib
 import time
+from typing import cast
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -185,7 +186,7 @@ def set_last_move(game_id: int, move: str) -> None:
 
 
 def get_last_move(game_id: int) -> str | None:
-    val = _redis.get(f"game:last_move:{game_id}")
+    val = cast(bytes | None, _redis.get(f"game:last_move:{game_id}"))
     return val.decode() if val else None
 
 
@@ -193,7 +194,7 @@ def timeout_disconnect(db: Session, game_id: int, color: str, expected_ts: int):
     """Called after disconnect TTL expires. Returns finished game or None if reconnected/re-disconnected."""
     key = f"game:disconnect:{game_id}:{color}"
 
-    stored = _redis.get(key)
+    stored = cast(bytes | None, _redis.get(key))
     if stored is None:
         return None
 

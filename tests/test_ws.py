@@ -1,5 +1,4 @@
 import asyncio
-import threading
 
 import pytest
 from fastapi import WebSocketDisconnect
