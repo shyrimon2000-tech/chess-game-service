@@ -145,6 +145,7 @@ async def game_websocket(
 
         if is_player:
             try:
+                db.rollback()
                 current_game = game_service.get_game(db, game_id)
 
                 if current_game.status == "active":
