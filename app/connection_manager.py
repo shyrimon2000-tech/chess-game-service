@@ -5,6 +5,7 @@ class ConnectionManager:
     def __init__(self):
         self.connections: dict[int, list[WebSocket]] = {}
         self.players: dict[int, dict[int, WebSocket]] = {}
+        self.nicknames: dict[int, dict[int, str]] = {}
 
     async def connect(self, game_id: int, websocket: WebSocket, user_id: int | None = None):
         await websocket.accept()
@@ -24,6 +25,16 @@ class ConnectionManager:
                 pass
         if user_id is not None and game_id in self.players:
             self.players[game_id].pop(user_id, None)
+
+    def set_nickname(self, game_id: int, user_id: int, username: str) -> None:
+        if game_id not in self.nicknames:
+            self.nicknames[game_id] = {}
+        self.nicknames[game_id][user_id] = username
+
+    def get_nickname(self, game_id: int, user_id: int | None) -> str | None:
+        if user_id is None:
+            return None
+        return self.nicknames.get(game_id, {}).get(user_id)
 
     def connected_player_count(self, game_id: int) -> int:
         return len(self.players.get(game_id, {}))

@@ -34,9 +34,9 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
-TOKEN1 = jwt.encode({"sub": "1", "role": "user"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-TOKEN2 = jwt.encode({"sub": "2", "role": "user"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-TOKEN_SPECTATOR = jwt.encode({"sub": "99", "role": "user"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+TOKEN1 = jwt.encode({"sub": "1", "role": "user", "username": "alice"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+TOKEN2 = jwt.encode({"sub": "2", "role": "user", "username": "bob"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+TOKEN_SPECTATOR = jwt.encode({"sub": "99", "role": "user", "username": "spectator"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 INVALID_TOKEN = "invalid.token.here"
 
 
@@ -109,6 +109,22 @@ def test_ws_activating_player_receives_game_start():
 
     assert msg["type"] == "game_start"
     assert msg["game"]["status"] == "active"
+
+
+def test_ws_game_start_includes_nicknames():
+    from app.connection_manager import manager as ws_manager
+    http_create_game()
+    http_activate_game()
+
+    # alice connected during waiting phase — seed her nickname as the real flow would
+    ws_manager.set_nickname(1, 1, "alice")
+
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws:
+        msg = ws.receive_json()
+
+    assert msg["type"] == "game_start"
+    assert msg["white_nickname"] == "alice"
+    assert msg["black_nickname"] == "bob"
 
 
 # --- spectator ---
@@ -197,6 +213,24 @@ def test_ws_reconnect_sends_game_state_to_reconnecting_player(mock_game_service_
     assert msg["game"]["status"] == "active"
 
 
+def test_ws_reconnect_game_state_includes_nicknames(mock_game_service_redis):
+    http_create_game()
+    http_activate_game()
+
+    # bob connects first — registers his nickname, game_start sent
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws:
+        ws.receive_json()  # consume game_start
+
+    # now alice reconnects (simulate prior disconnect via Redis delete returning 1)
+    mock_game_service_redis.delete.return_value = 1
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as ws:
+        msg = ws.receive_json()  # game_state on reconnect
+
+    assert msg["type"] == "game_state"
+    assert msg["white_nickname"] == "alice"
+    assert msg["black_nickname"] == "bob"
+
+
 def test_ws_reconnect_broadcasts_player_reconnected(mock_game_service_redis):
     # Single-connection test: the reconnecting player receives their own broadcast
     # (same event loop — no cross-portal send issue).
@@ -224,6 +258,24 @@ def test_ws_spectator_receives_game_state_on_connect():
 
     assert msg["type"] == "game_state"
     assert msg["game"]["status"] == "active"
+
+
+def test_ws_spectator_game_state_includes_nicknames():
+    from app.connection_manager import manager as ws_manager
+    http_create_game()
+    http_activate_game()
+
+    # both players connected before spectator — seed alice, bob registers via WS
+    ws_manager.set_nickname(1, 1, "alice")
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws:
+        ws.receive_json()  # consume game_start (registers bob's nickname)
+
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN_SPECTATOR}") as ws:
+        msg = ws.receive_json()
+
+    assert msg["type"] == "game_state"
+    assert msg["white_nickname"] == "alice"
+    assert msg["black_nickname"] == "bob"
 
 
 # --- _disconnect_timeout ---

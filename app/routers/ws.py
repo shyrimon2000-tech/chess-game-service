@@ -30,11 +30,14 @@ async def _disconnect_timeout(game_id: int, color: str, disconnect_ts: int):
         db.close()
 
 
-def _decode_token(token: str) -> int | None:
+def _decode_token(token: str) -> tuple[int, str] | None:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         sub = payload.get("sub")
-        return int(sub) if sub else None
+        username = payload.get("username")
+        if not sub or not username:
+            return None
+        return int(sub), username
     except (JWTError, ValueError):
         return None
 
@@ -50,10 +53,11 @@ async def game_websocket(
     token: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    user_id = _decode_token(token)
-    if user_id is None:
+    token_data = _decode_token(token)
+    if token_data is None:
         await websocket.close(code=4001)
         return
+    user_id, username = token_data
 
     try:
         game = game_service.get_game(db, game_id)
@@ -63,6 +67,8 @@ async def game_websocket(
 
     is_player = user_id in (game.white_player_id, game.black_player_id)
     await manager.connect(game_id, websocket, user_id if is_player else None)
+    if is_player:
+        manager.set_nickname(game_id, user_id, username)
 
     if is_player and game.status == "active":
         was_disconnected = game_service.handle_reconnect(db, game_id, user_id)
@@ -72,6 +78,8 @@ async def game_websocket(
             await manager.send_personal(websocket, {
                 "type": "game_state",
                 "game": _serialize_game(game),
+                "white_nickname": manager.get_nickname(game_id, game.white_player_id),
+                "black_nickname": manager.get_nickname(game_id, game.black_player_id),
                 **({"last_move": last_move} if last_move else {}),
             })
             await manager.broadcast(game_id, {
@@ -82,6 +90,8 @@ async def game_websocket(
             await manager.broadcast(game_id, {
                 "type": "game_start",
                 "game": _serialize_game(game),
+                "white_nickname": manager.get_nickname(game_id, game.white_player_id),
+                "black_nickname": manager.get_nickname(game_id, game.black_player_id),
             })
 
     if not is_player and game.status == "active":
@@ -89,6 +99,8 @@ async def game_websocket(
         await manager.send_personal(websocket, {
             "type": "game_state",
             "game": _serialize_game(game),
+            "white_nickname": manager.get_nickname(game_id, game.white_player_id),
+            "black_nickname": manager.get_nickname(game_id, game.black_player_id),
             **({"last_move": last_move} if last_move else {}),
         })
 
