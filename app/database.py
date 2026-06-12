@@ -1,10 +1,11 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from app.config import settings
 
 
-engine = create_engine(settings.DATABASE_URL)
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -13,6 +14,12 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
+
+@retry(wait=wait_fixed(2), stop=stop_after_attempt(30))
+def wait_for_db() -> None:
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
 
 
 def get_db():

@@ -1,4 +1,5 @@
 import chess
+import logging
 import redis as redis_lib
 import time
 from typing import cast
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.events.publisher import publish_game_abandoned, publish_game_over
 from app.repositories import game_repo
+
+logger = logging.getLogger(__name__)
 
 DISCONNECT_TTL = 30
 
@@ -160,7 +163,11 @@ def handle_disconnect(db: Session, game_id: int, user_id: int) -> int | None:
 
     disconnect_ts = int(time.time())
     key = f"game:disconnect:{game_id}:{color}"
-    _redis.set(key, str(disconnect_ts), ex=DISCONNECT_TTL)
+    try:
+        _redis.set(key, str(disconnect_ts), ex=DISCONNECT_TTL)
+    except Exception:
+        logger.exception("Redis unavailable, disconnect timer not set for game %s", game_id)
+        return None
     return disconnect_ts
 
 
@@ -177,32 +184,45 @@ def handle_reconnect(db: Session, game_id: int, user_id: int) -> bool:
         raise ValueError("User is not a player in this game")
 
     key = f"game:disconnect:{game_id}:{color}"
-    deleted = _redis.delete(key)
-    return bool(deleted)
+    try:
+        deleted = _redis.delete(key)
+        return bool(deleted)
+    except Exception:
+        logger.exception("Redis unavailable, treating reconnect as fresh connect for game %s", game_id)
+        return False
 
 
 def set_last_move(game_id: int, move: str) -> None:
-    _redis.set(f"game:last_move:{game_id}", move)
+    try:
+        _redis.set(f"game:last_move:{game_id}", move)
+    except Exception:
+        logger.exception("Redis unavailable, last move not saved for game %s", game_id)
 
 
 def get_last_move(game_id: int) -> str | None:
-    val = cast(bytes | None, _redis.get(f"game:last_move:{game_id}"))
-    return val.decode() if val else None
+    try:
+        val = cast(bytes | None, _redis.get(f"game:last_move:{game_id}"))
+        return val.decode() if val else None
+    except Exception:
+        logger.exception("Redis unavailable, last move not available for game %s", game_id)
+        return None
 
 
 def timeout_disconnect(db: Session, game_id: int, color: str, expected_ts: int):
     """Called after disconnect TTL expires. Returns finished game or None if reconnected/re-disconnected."""
     key = f"game:disconnect:{game_id}:{color}"
 
-    stored = cast(bytes | None, _redis.get(key))
-    if stored is None:
+    try:
+        stored = cast(bytes | None, _redis.get(key))
+        if stored is None:
+            return None
+        # Stale task: player reconnected then disconnected again — stored ts is newer
+        if int(stored) != expected_ts:
+            return None
+        _redis.delete(key)
+    except Exception:
+        logger.exception("Redis unavailable in timeout_disconnect for game %s", game_id)
         return None
-
-    # Stale task: player reconnected then disconnected again — stored ts is newer
-    if int(stored) != expected_ts:
-        return None
-
-    _redis.delete(key)
 
     game = game_repo.get_game_by_id(db, game_id)
     if game is None or game.status != "active":

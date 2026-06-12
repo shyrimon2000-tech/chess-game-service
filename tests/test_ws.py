@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import json
 
 import pytest
 from fastapi import WebSocketDisconnect
@@ -68,15 +70,36 @@ def reset_state():
 
 @pytest.fixture(autouse=True)
 def mock_game_service_redis():
-    # Publisher is patched at function level, not via redis.from_url — both patches
-    # would target the same attribute on the redis module and the second would win.
+    # Simulates Redis for nicknames and broadcast.
+    # mock_publish delivers broadcast locally so WS clients receive messages in tests.
+    nickname_store: dict[str, bytes] = {}
+
+    async def cm_set(key, value):
+        nickname_store[key] = value.encode() if isinstance(value, str) else value
+
+    async def cm_get(key):
+        return nickname_store.get(key)
+
+    async def cm_publish(channel, payload):
+        from app.connection_manager import manager
+        data = json.loads(payload)
+        await manager.local_broadcast(data["game_id"], data["message"])
+
     with patch("app.services.game_service._redis") as mock_redis, \
          patch("app.routers.ws.asyncio.create_task") as mock_task, \
-         patch("app.events.publisher._client"):
+         patch("app.events.publisher._client"), \
+         patch("app.connection_manager._redis") as mock_cm_redis, \
+         patch("app.database.wait_for_db"), \
+         patch("app.events.publisher.wait_for_redis"):
         mock_redis.delete.return_value = 0
         mock_redis.set.return_value = True
-        mock_redis.get.return_value = None  # get_last_move returns None by default
+        mock_redis.get.return_value = None
         mock_task.side_effect = lambda coro: coro.close()
+
+        mock_cm_redis.set = AsyncMock(side_effect=cm_set)
+        mock_cm_redis.get = AsyncMock(side_effect=cm_get)
+        mock_cm_redis.publish = AsyncMock(side_effect=cm_publish)
+
         yield mock_redis
 
 
@@ -100,7 +123,6 @@ def test_ws_unknown_game_closes_connection():
 # --- game activation ---
 
 def test_ws_activating_player_receives_game_start():
-    # game_start is broadcast when a player connects to an active game (not a reconnect)
     http_create_game()
     http_activate_game()
 
@@ -112,15 +134,15 @@ def test_ws_activating_player_receives_game_start():
 
 
 def test_ws_game_start_includes_nicknames():
-    from app.connection_manager import manager as ws_manager
+    # Alice connects while game is waiting (seeds her nickname), then bob connects after
+    # activation — game_start broadcast includes both nicknames.
     http_create_game()
-    http_activate_game()
 
-    # alice connected during waiting phase — seed her nickname as the real flow would
-    ws_manager.set_nickname(1, 1, "alice")
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as _:
+        http_activate_game()
 
-    with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws:
-        msg = ws.receive_json()
+        with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws_bob:
+            msg = ws_bob.receive_json()
 
     assert msg["type"] == "game_start"
     assert msg["white_nickname"] == "alice"
@@ -217,14 +239,14 @@ def test_ws_reconnect_game_state_includes_nicknames(mock_game_service_redis):
     http_create_game()
     http_activate_game()
 
-    # bob connects first — registers his nickname, game_start sent
+    # Bob connects first, seeds his nickname via normal WS flow
     with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws:
         ws.receive_json()  # consume game_start
 
-    # now alice reconnects (simulate prior disconnect via Redis delete returning 1)
+    # Alice reconnects — set_nickname("alice") runs before get_nickname, so both are available
     mock_game_service_redis.delete.return_value = 1
     with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as ws:
-        msg = ws.receive_json()  # game_state on reconnect
+        msg = ws.receive_json()  # game_state (personal, sent before broadcast)
 
     assert msg["type"] == "game_state"
     assert msg["white_nickname"] == "alice"
@@ -232,22 +254,20 @@ def test_ws_reconnect_game_state_includes_nicknames(mock_game_service_redis):
 
 
 def test_ws_reconnect_broadcasts_player_reconnected(mock_game_service_redis):
-    # Single-connection test: the reconnecting player receives their own broadcast
-    # (same event loop — no cross-portal send issue).
     mock_game_service_redis.delete.return_value = 1  # white had an active disconnect key
 
     http_create_game()
     http_activate_game()
 
     with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as ws:
-        ws.receive_json()  # game_state (personal sync)
+        ws.receive_json()  # game_state (personal)
         msg = ws.receive_json()  # player_reconnected (broadcast)
 
     assert msg["type"] == "player_reconnected"
     assert msg["color"] == "white"
 
 
-# --- spectator ---
+# --- spectator state ---
 
 def test_ws_spectator_receives_game_state_on_connect():
     http_create_game()
@@ -261,17 +281,18 @@ def test_ws_spectator_receives_game_state_on_connect():
 
 
 def test_ws_spectator_game_state_includes_nicknames():
-    from app.connection_manager import manager as ws_manager
+    # Alice connects while waiting (seeds nickname), then game activates, bob connects,
+    # finally spectator connects and receives game_state with both nicknames.
     http_create_game()
-    http_activate_game()
 
-    # both players connected before spectator — seed alice, bob registers via WS
-    ws_manager.set_nickname(1, 1, "alice")
-    with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws:
-        ws.receive_json()  # consume game_start (registers bob's nickname)
+    with client.websocket_connect(f"/ws/games/1?token={TOKEN1}") as _:
+        http_activate_game()
 
-    with client.websocket_connect(f"/ws/games/1?token={TOKEN_SPECTATOR}") as ws:
-        msg = ws.receive_json()
+        with client.websocket_connect(f"/ws/games/1?token={TOKEN2}") as ws_bob:
+            ws_bob.receive_json()  # consume game_start (seeds bob's nickname)
+
+            with client.websocket_connect(f"/ws/games/1?token={TOKEN_SPECTATOR}") as ws_spec:
+                msg = ws_spec.receive_json()
 
     assert msg["type"] == "game_state"
     assert msg["white_nickname"] == "alice"
@@ -307,5 +328,82 @@ def test_disconnect_timeout_skips_broadcast_when_player_reconnected():
              patch("app.routers.ws.manager.broadcast", new_callable=AsyncMock) as mock_broadcast:
             await ws_module._disconnect_timeout(1, "white", 12345)
             mock_broadcast.assert_not_called()
+
+    asyncio.run(_run())
+
+
+# --- Redis broadcast ---
+
+def test_broadcast_publishes_to_redis():
+    from app.connection_manager import ConnectionManager
+
+    async def _run():
+        with patch("app.connection_manager._redis") as mock_redis:
+            mock_redis.publish = AsyncMock()
+            cm = ConnectionManager()
+            await cm.broadcast(42, {"type": "game_state"})
+
+            mock_redis.publish.assert_called_once()
+            channel, payload = mock_redis.publish.call_args[0]
+            assert channel == "ws_broadcast"
+            data = json.loads(payload)
+            assert data["game_id"] == 42
+            assert data["message"] == {"type": "game_state"}
+
+    asyncio.run(_run())
+
+
+def test_broadcast_falls_back_to_local_when_redis_down():
+    from app.connection_manager import ConnectionManager
+
+    async def _run():
+        with patch("app.connection_manager._redis") as mock_redis:
+            mock_redis.publish = AsyncMock(side_effect=Exception("Redis down"))
+            cm = ConnectionManager()
+            mock_ws = AsyncMock()
+            cm.connections[42] = [mock_ws]
+
+            await cm.broadcast(42, {"type": "game_state"})
+
+            mock_ws.send_json.assert_called_once_with({"type": "game_state"})
+
+    asyncio.run(_run())
+
+
+def test_ws_relay_delivers_to_local_connections():
+    from app.events.ws_relay import _relay_loop
+    from app.connection_manager import manager
+
+    async def _run():
+        mock_ws = AsyncMock()
+        manager.connections[99] = [mock_ws]
+
+        messages = [
+            {"type": "subscribe", "data": None},
+            {"type": "message", "data": json.dumps({"game_id": 99, "message": {"type": "game_over"}})},
+        ]
+
+        async def mock_listen():
+            for msg in messages:
+                yield msg
+            await asyncio.Event().wait()
+
+        mock_pubsub = AsyncMock()
+        mock_pubsub.listen = mock_listen
+
+        mock_client = MagicMock()
+        mock_client.pubsub.return_value = mock_pubsub
+
+        with patch("app.events.ws_relay.aioredis") as mock_aioredis:
+            mock_aioredis.from_url.return_value = mock_client
+            # loop.create_task bypasses the asyncio.create_task patch from the autouse fixture
+            task = asyncio.get_event_loop().create_task(_relay_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        manager.connections.pop(99, None)
+        mock_ws.send_json.assert_called_once_with({"type": "game_over"})
 
     asyncio.run(_run())

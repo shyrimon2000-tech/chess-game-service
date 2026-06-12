@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import String, Text
+from sqlalchemy import String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -10,6 +10,7 @@ INITIAL_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 class Game(Base):
     __tablename__ = "games"
+    __table_args__ = (UniqueConstraint("room_id", name="uq_games_room_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     room_id: Mapped[int]

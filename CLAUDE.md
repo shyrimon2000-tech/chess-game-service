@@ -78,8 +78,9 @@ routers → services → repositories → models
 **`app/schemas.py`** — Pydantic schemas for request/response serialization
 
 **`app/events/`** — Redis pub/sub
-- `publisher.py` — publishes `game_over`, `game_abandoned`, and `game_created` to the `game_events` channel
+- `publisher.py` — publishes `game_created`, `game_over`, and `game_abandoned` to the `game_events` channel
 - `subscriber.py` — subscribes to `room_events`; handles `room_created` by creating a new game with `white_player_id` only; handles `room_activated` by setting `black_player_id`, activating the game, and broadcasting `game_start` to all WS clients
+- `ws_relay.py` — subscribes to the internal `ws_broadcast` Redis channel and calls `local_broadcast()` to deliver messages to WebSocket clients connected to this instance; enables cross-instance broadcasting
 
 ---
 
@@ -90,8 +91,8 @@ Single table: `games`
 | Field | Type | Notes |
 |---|---|---|
 | `id` | Integer PK | |
-| `room_id` | Integer | Plain int — no FK to room-service |
-| `status` | String(20) | `waiting`, `active`, `finished` |
+| `room_id` | Integer, UNIQUE | Plain int — no FK to room-service |
+| `status` | String(20) | `waiting` or `active` |
 | `white_player_id` | Integer | Plain int — no FK to auth-service |
 | `black_player_id` | Integer nullable | Plain int — no FK to auth-service |
 | `current_turn` | String(5) nullable | `white` or `black` |
@@ -161,7 +162,7 @@ Move validation uses the `chess` Python library. Board state is stored as a FEN 
 
 ### Redis Events
 
-Two channels are used:
+Three channels are used:
 
 **`game_events`** — published by game-service, consumed by room-service:
 
@@ -182,6 +183,14 @@ Two channels are used:
 `room_created` — game-service creates a new game (`status=waiting`, `white_player_id` set, `black_player_id` null), then publishes `game_created` back so room-service can store the `game_id`.
 
 `room_activated` — game-service sets `black_player_id`, changes status to `active`, and broadcasts `game_start` to all connected WS clients for that game.
+
+**`ws_broadcast`** — internal channel used for cross-instance WebSocket delivery:
+
+```json
+{ "game_id": 1, "message": { "type": "game_state", "game": { ... } } }
+```
+
+`broadcast()` in `connection_manager.py` publishes here. Each instance's `ws_relay.py` subscribes and calls `local_broadcast()` to reach its own connected clients.
 
 ### Cross-Service Boundary
 

@@ -9,3 +9,4 @@ python-dotenv==1.2.2
 python-jose==3.5.0
 redis==7.4.0
 chess==1.10.0
+tenacity==8.2.3

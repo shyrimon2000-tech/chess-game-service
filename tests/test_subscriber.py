@@ -1,4 +1,5 @@
 import json
+from sqlalchemy.exc import IntegrityError
 from unittest.mock import MagicMock, patch
 
 from app.events.subscriber import _handle_message
@@ -67,3 +68,20 @@ def test_unknown_event_is_ignored():
     with patch("app.events.subscriber.game_service.create_game") as mock_create:
         _handle_message(message)
         mock_create.assert_not_called()
+
+
+def test_room_created_duplicate_room_id_is_handled_gracefully():
+    message = {
+        "type": "message",
+        "data": json.dumps({"event": "room_created", "room_id": 42, "white_player_id": 7}),
+    }
+    with patch("app.events.subscriber.game_service.create_game") as mock_create, \
+         patch("app.events.subscriber.SessionLocal") as mock_session, \
+         patch("app.events.subscriber.publish_game_created"):
+        mock_create.side_effect = IntegrityError("UNIQUE constraint failed", None, None)
+        mock_db = MagicMock()
+        mock_session.return_value = mock_db
+
+        _handle_message(message)  # should not raise
+
+        mock_db.close.assert_called_once()

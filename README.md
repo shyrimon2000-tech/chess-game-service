@@ -28,8 +28,9 @@ Dev: [![CI Dev](https://github.com/shyrimon2000-tech/chess-game-service/actions/
 - Game abandoned event when waiting player disconnects
 - Spectator WebSocket connections (read-only)
 - JWT token validation via WebSocket query parameter
-- Redis pub/sub: subscribes to `room_created`, publishes `game_over` and `game_abandoned`
+- Redis pub/sub: subscribes to `room_created` and `room_activated`; publishes `game_created`, `game_over`, and `game_abandoned`
 - Automatic game creation triggered by Redis event from room-service
+- Cross-instance WebSocket broadcasting via Redis `ws_broadcast` channel
 - MySQL database persistence
 - SQLAlchemy ORM
 - Alembic database migrations
@@ -51,6 +52,7 @@ Dev: [![CI Dev](https://github.com/shyrimon2000-tech/chess-game-service/actions/
 - chess (python-chess)
 - python-jose
 - Pydantic Settings
+- tenacity
 - pytest
 - Docker
 - Docker Compose
@@ -71,7 +73,8 @@ app/
 │   └── game_repo.py
 ├── events/
 │   ├── publisher.py
-│   └── subscriber.py
+│   ├── subscriber.py
+│   └── ws_relay.py
 ├── config.py
 ├── connection_manager.py
 ├── database.py
@@ -176,7 +179,7 @@ Request body:
 
 Moves use UCI format: source square + destination square, for example `e2e4`, `g1f3`, `e1g1` (castling).
 
-Response: updated game object. If the move ends the game, `status` becomes `"finished"` and `winner` is set.
+Response: updated game object. If the move ends the game, the game record is deleted — the response contains the final snapshot with `winner` set.
 
 ---
 
@@ -216,7 +219,7 @@ Authorization: Bearer <access_token>
 
 Ends the game immediately. The opposing player wins. Publishes a `game_over` event to Redis.
 
-Response: updated game object with `status: "finished"` and `winner` set.
+Response: final game snapshot with `winner` set. The game record is deleted after resignation.
 
 ---
 
@@ -307,38 +310,46 @@ Sent only to the requester on a validation error:
 ### Subscribed: `room_events` channel
 
 ```json
-{ "event": "room_created", "room_id": 42, "white_player_id": 7 }
+{ "event": "room_created",   "room_id": 42, "white_player_id": 7 }
+{ "event": "room_activated", "room_id": 42, "white_player_id": 7, "black_player_id": 12 }
 ```
 
-When received, game-service creates a new game in `waiting` status with `white_player_id` set. The black player slot is filled when the second player connects via WebSocket.
+`room_created` — game-service creates a new game in `waiting` status with `white_player_id` set, then publishes `game_created` back so room-service can store the `game_id`.
+
+`room_activated` — game-service sets `black_player_id`, changes status to `active`, and broadcasts `game_start` to all connected WebSocket clients.
 
 ### Published: `game_events` channel
 
 ```json
-{ "event": "game_over", "game_id": 1, "room_id": 42, "winner": "white" }
-```
-
-Published on checkmate, stalemate, resignation, or 30-second disconnect timeout. Room-service subscribes and marks the room as `finished`.
-
-```json
+{ "event": "game_created",   "game_id": 1, "room_id": 42 }
+{ "event": "game_over",      "game_id": 1, "room_id": 42, "winner": "white" }
 { "event": "game_abandoned", "game_id": 1, "room_id": 42 }
 ```
 
-Published when the only player disconnects while the game is still in `waiting` status.
+`game_created` — published immediately after game creation so room-service can store the `game_id`.
+
+`game_over` — published on checkmate, stalemate, resignation, or 30-second disconnect timeout.
+
+`game_abandoned` — published when the only player disconnects while the game is still in `waiting` status.
+
+### Internal: `ws_broadcast` channel
+
+Used internally for cross-instance WebSocket broadcasting. When `broadcast()` is called, it publishes to this channel. Each service instance runs a `ws_relay` loop that subscribes to the channel and delivers messages to locally connected WebSocket clients.
 
 ---
 
 ## Game Lifecycle
 
 ```text
-waiting → active → finished
+waiting → active → [deleted]
 ```
 
 | Status | Meaning |
 |---|---|
 | `waiting` | Game created by `room_created` event, waiting for second player to connect via WebSocket |
 | `active` | Both players connected, moves are being played |
-| `finished` | Game ended — checkmate, stalemate, resignation, or disconnect timeout |
+
+Games are **deleted from the database** when they end — there is no `finished` status. The final game snapshot is broadcast via WebSocket before deletion.
 
 ---
 
@@ -494,13 +505,13 @@ Notes:
 | Field | Type | Description |
 |---|---|---|
 | `id` | Integer PK | Internal game ID |
-| `room_id` | Integer | Room this game belongs to — plain int, no FK to room-service |
-| `status` | String(20) | `waiting`, `active`, or `finished` |
+| `room_id` | Integer, UNIQUE | Room this game belongs to — plain int, no FK to room-service |
+| `status` | String(20) | `waiting` or `active` |
 | `white_player_id` | Integer | Player assigned to white — plain int, no FK to auth-service |
-| `black_player_id` | Integer nullable | Player assigned to black — set when second player connects |
-| `current_turn` | String(5) nullable | `white` or `black` — null when game is not active |
+| `black_player_id` | Integer nullable | Player assigned to black — set on `room_activated` |
+| `current_turn` | String(5) nullable | `white` or `black` |
 | `board_state` | Text | FEN string representing current board position |
-| `winner` | String(5) nullable | `white`, `black`, or `draw` — null until game ends |
+| `winner` | String(5) nullable | `white`, `black`, or `draw` — set right before the row is deleted |
 | `created_at` | DateTime | UTC |
 | `updated_at` | DateTime | UTC, updated on every change |
 

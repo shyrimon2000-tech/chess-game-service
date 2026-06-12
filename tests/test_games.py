@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from unittest.mock import ANY, patch
@@ -291,3 +292,57 @@ def test_timeout_disconnect_finishes_game_if_key_exists(mock_redis, mock_publish
     assert result.status == "finished"
     assert result.winner == "black"
     mock_redis.delete.assert_called_once()
+
+
+# --- resilience ---
+
+@patch("app.services.game_service._redis")
+def test_disconnect_active_game_redis_down_returns_none(mock_redis):
+    mock_redis.set.side_effect = Exception("Redis unavailable")
+    setup_active_game()
+    db = TestingSessionLocal()
+    try:
+        result = game_service.handle_disconnect(db, 1, 1)
+    finally:
+        db.close()
+    assert result is None
+
+
+@patch("app.services.game_service._redis")
+def test_reconnect_redis_down_returns_false(mock_redis):
+    mock_redis.delete.side_effect = Exception("Redis unavailable")
+    setup_active_game()
+    db = TestingSessionLocal()
+    try:
+        result = game_service.handle_reconnect(db, 1, 1)
+    finally:
+        db.close()
+    assert result is False
+
+
+@patch("app.events.publisher._client")
+@patch("app.services.game_service._redis")
+def test_timeout_disconnect_redis_down_returns_none(mock_redis, mock_publisher):
+    mock_redis.get.side_effect = Exception("Redis unavailable")
+    setup_active_game()
+    db = TestingSessionLocal()
+    try:
+        result = game_service.timeout_disconnect(db, 1, "white", expected_ts=123)
+    finally:
+        db.close()
+    assert result is None
+
+
+@patch("app.events.publisher._client")
+def test_publish_failure_does_not_crash_resign(mock_client):
+    mock_client.publish.side_effect = Exception("Redis unavailable")
+    setup_active_game()
+    as_user(1)
+    response = client.post("/games/1/resign")
+    assert response.status_code == 200
+
+
+def test_duplicate_room_id_raises_integrity_error():
+    create_game(room_id=1, white_player_id=1)
+    with pytest.raises(IntegrityError):
+        create_game(room_id=1, white_player_id=2)
