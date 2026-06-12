@@ -1,8 +1,10 @@
 import asyncio
 import json
 import logging
+import threading
+import time
 
-import redis.asyncio as aioredis
+import redis
 
 from app.config import settings
 from app.connection_manager import manager, _WS_BROADCAST_CHANNEL
@@ -10,27 +12,35 @@ from app.connection_manager import manager, _WS_BROADCAST_CHANNEL
 logger = logging.getLogger(__name__)
 
 _RECONNECT_DELAY = 5
+_loop: asyncio.AbstractEventLoop | None = None
 
 
-async def _relay_loop():
+def _relay_thread():
     while True:
         try:
-            client = aioredis.from_url(settings.REDIS_URL)
+            client = redis.from_url(settings.REDIS_URL)
             pubsub = client.pubsub()
-            await pubsub.subscribe(_WS_BROADCAST_CHANNEL)
-            logger.info("WS relay subscribed to %s", _WS_BROADCAST_CHANNEL)
-            async for message in pubsub.listen():
+            pubsub.subscribe(_WS_BROADCAST_CHANNEL)
+            for message in pubsub.listen():
                 if message["type"] != "message":
                     continue
                 try:
                     data = json.loads(message["data"])
-                    await manager.local_broadcast(data["game_id"], data["message"])
+                    if _loop is not None:
+                        future = asyncio.run_coroutine_threadsafe(
+                            manager.local_broadcast(data["game_id"], data["message"]),
+                            _loop,
+                        )
+                        future.result(timeout=5)
                 except Exception:
                     logger.exception("WS relay failed to process message: %s", message)
         except Exception:
             logger.error("WS relay disconnected, reconnecting in %ss...", _RECONNECT_DELAY)
-            await asyncio.sleep(_RECONNECT_DELAY)
+            time.sleep(_RECONNECT_DELAY)
 
 
 async def start_ws_relay():
-    asyncio.create_task(_relay_loop())
+    global _loop
+    _loop = asyncio.get_running_loop()
+    thread = threading.Thread(target=_relay_thread, daemon=True)
+    thread.start()

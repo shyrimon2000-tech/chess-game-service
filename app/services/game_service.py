@@ -164,7 +164,7 @@ def handle_disconnect(db: Session, game_id: int, user_id: int) -> int | None:
     disconnect_ts = int(time.time())
     key = f"game:disconnect:{game_id}:{color}"
     try:
-        _redis.set(key, str(disconnect_ts), ex=DISCONNECT_TTL)
+        _redis.set(key, str(disconnect_ts), ex=DISCONNECT_TTL + 10)
     except Exception:
         logger.exception("Redis unavailable, disconnect timer not set for game %s", game_id)
         return None

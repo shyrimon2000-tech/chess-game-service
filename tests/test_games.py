@@ -243,7 +243,7 @@ def test_disconnect_active_game_sets_redis_key(mock_redis):
     finally:
         db.close()
 
-    mock_redis.set.assert_called_once_with("game:disconnect:1:white", ANY, ex=30)
+    mock_redis.set.assert_called_once_with("game:disconnect:1:white", ANY, ex=40)
 
 
 @patch("app.services.game_service._redis")

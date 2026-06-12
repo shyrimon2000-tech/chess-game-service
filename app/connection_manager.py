@@ -57,7 +57,8 @@ class ConnectionManager:
         return len(self.players.get(game_id, {}))
 
     async def local_broadcast(self, game_id: int, message: dict):
-        for ws in self.connections.get(game_id, []):
+        conns = self.connections.get(game_id, [])
+        for ws in conns:
             try:
                 await ws.send_json(message)
             except Exception:
