@@ -258,13 +258,13 @@ Resign:
 Broadcast to all connections when the second player joins:
 
 ```json
-{ "type": "game_start", "game": { ... } }
+{ "type": "game_start", "game": { ... }, "white_nickname": "alex", "black_nickname": "bob" }
 ```
 
 Broadcast after each move:
 
 ```json
-{ "type": "game_state", "game": { ... } }
+{ "type": "game_state", "game": { ... }, "white_nickname": "alex", "black_nickname": "bob" }
 ```
 
 Broadcast when the game ends:
@@ -282,7 +282,7 @@ Sent only to the requester:
 Broadcast when a player disconnects:
 
 ```json
-{ "type": "player_disconnected", "color": "white", "reconnect_seconds": 30 }
+{ "type": "player_disconnected", "color": "white", "timeout_seconds": 30 }
 ```
 
 Broadcast when a disconnected player reconnects within 30 seconds:
@@ -569,5 +569,5 @@ Test coverage includes:
 Current test count:
 
 ```text
-38 passed
+51 passed
 ```

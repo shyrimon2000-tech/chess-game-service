@@ -353,3 +353,11 @@ Documented so these issues are not re-introduced.
 ### 7. Stale disconnect task on rapid reconnect
 **Problem:** If a player disconnected and reconnected within the 30-second window, the old abandon timer kept running. When it expired it broadcast `game_abandoned` even though the player was back.
 **Fix:** The disconnect task is tracked per-connection and cancelled on reconnect before starting any new timer.
+
+### 8. ws_relay asyncio task never received Redis messages under uvloop
+**Problem:** `ws_relay.py` subscribed to the `ws_broadcast` Redis channel using an asyncio `aioredis` task. Under uvicorn's uvloop event loop, the asyncio StreamReader socket reads did not wake up the task even though data had arrived in the TCP buffer — confirmed by `PUBSUB NUMSUB` returning 1 and `PUBLISH` returning 1, but the task logger never firing.
+**Fix:** Replaced the asyncio relay task with a `threading.Thread` running a sync `redis.from_url` pub/sub subscriber. The thread bridges back to the event loop via `asyncio.run_coroutine_threadsafe(manager.local_broadcast(...), _loop)`. The running loop is captured in `start_ws_relay()` before the thread starts.
+
+### 9. Abandon timeout race condition — Redis key expired before asyncio.sleep woke
+**Problem:** The abandon timer used `asyncio.sleep(DISCONNECT_TTL)` (30s) and the Redis disconnect key TTL was also 30s. Due to event loop scheduling overhead, `asyncio.sleep` woke up slightly after 30s — by which point the key had already expired. The timer then saw no key and did nothing, so the abandoned game was never cleaned up.
+**Fix:** Redis key TTL is set to `DISCONNECT_TTL + 10` (40s). The asyncio timer still fires at 30s, but the key is guaranteed to still be present when it checks. The player-facing countdown remains 30 seconds.
