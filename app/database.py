@@ -1,9 +1,12 @@
+import logging
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 
 engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
 
@@ -20,6 +23,7 @@ Base = declarative_base()
 def wait_for_db() -> None:
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
+    logger.info("Database connection established")
 
 
 def get_db():

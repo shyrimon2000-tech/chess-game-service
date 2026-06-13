@@ -1,3 +1,5 @@
+import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +10,16 @@ from app.events.subscriber import start_subscriber
 from app.events.ws_relay import start_ws_relay
 from app.routers import games, ws
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+    stream=sys.stdout,
+    force=True,
+)
+
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -15,6 +27,7 @@ async def lifespan(app: FastAPI):
     wait_for_redis()
     start_subscriber()
     await start_ws_relay()
+    logger.info("chess-game-service started")
     yield
 
 
