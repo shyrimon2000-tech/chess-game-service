@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import json
 
 import pytest
@@ -371,39 +370,36 @@ def test_broadcast_falls_back_to_local_when_redis_down():
 
 
 def test_ws_relay_delivers_to_local_connections():
-    from app.events.ws_relay import _relay_loop
+    import threading
+    import app.events.ws_relay as ws_relay_module
     from app.connection_manager import manager
 
     async def _run():
         mock_ws = AsyncMock()
         manager.connections[99] = [mock_ws]
+        ws_relay_module._loop = asyncio.get_running_loop()
 
-        messages = [
-            {"type": "subscribe", "data": None},
-            {"type": "message", "data": json.dumps({"game_id": 99, "message": {"type": "game_over"}})},
-        ]
+        hold = threading.Event()
 
-        async def mock_listen():
-            for msg in messages:
-                yield msg
-            await asyncio.Event().wait()
+        def mock_listen():
+            yield {"type": "subscribe", "data": None}
+            yield {"type": "message", "data": json.dumps({"game_id": 99, "message": {"type": "game_over"}})}
+            hold.wait()
 
-        mock_pubsub = AsyncMock()
+        mock_pubsub = MagicMock()
         mock_pubsub.listen = mock_listen
 
         mock_client = MagicMock()
         mock_client.pubsub.return_value = mock_pubsub
 
-        with patch("app.events.ws_relay.aioredis") as mock_aioredis:
-            mock_aioredis.from_url.return_value = mock_client
-            # loop.create_task bypasses the asyncio.create_task patch from the autouse fixture
-            task = asyncio.get_event_loop().create_task(_relay_loop())
-            await asyncio.sleep(0.05)
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        with patch("app.events.ws_relay.redis") as mock_redis:
+            mock_redis.from_url.return_value = mock_client
+            thread = threading.Thread(target=ws_relay_module._relay_thread, daemon=True)
+            thread.start()
+            await asyncio.sleep(0.1)
 
         manager.connections.pop(99, None)
         mock_ws.send_json.assert_called_once_with({"type": "game_over"})
+        hold.set()
 
     asyncio.run(_run())

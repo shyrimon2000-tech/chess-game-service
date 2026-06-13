@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from jose import JWTError, jwt
@@ -9,6 +10,8 @@ from app.connection_manager import manager
 from app.database import SessionLocal, get_db
 from app.schemas import GameResponse
 from app.services import game_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
