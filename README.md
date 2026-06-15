@@ -8,9 +8,9 @@ This service handles WebSocket-based gameplay, chess move validation, board stat
 
 ## Badges
 
-Main: [![CI Main](https://github.com/shyrimon2000-tech/chess-game-service/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/shyrimon2000-tech/chess-game-service/actions)
-
 Dev: [![CI Dev](https://github.com/shyrimon2000-tech/chess-game-service/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/shyrimon2000-tech/chess-game-service/actions)
+
+Pull Request: [![CI PR](https://github.com/shyrimon2000-tech/chess-game-service/actions/workflows/ci.yml/badge.svg?event=pull_request)](https://github.com/shyrimon2000-tech/chess-game-service/actions)
 
 ---
 
