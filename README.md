@@ -34,7 +34,8 @@ Pull Request: [![CI PR](https://github.com/shyrimon2000-tech/chess-game-service/
 - MySQL database persistence
 - SQLAlchemy ORM
 - Alembic database migrations
-- Automated tests with pytest
+- Automated unit tests with pytest
+- End-to-end tests with Playwright against the full service stack
 
 ---
 
@@ -54,6 +55,7 @@ Pull Request: [![CI PR](https://github.com/shyrimon2000-tech/chess-game-service/
 - Pydantic Settings
 - tenacity
 - pytest
+- Playwright (e2e)
 - Docker
 - Docker Compose
 
@@ -90,7 +92,55 @@ tests/
 ├── test_games.py
 ├── test_ws.py
 └── test_subscriber.py
+
+e2e_tests/
+├── chess_test1.py  — T1–T4:   resign flow, banners
+├── chess_test2.py  — T5–T8:   moves, turn enforcement, illegal move
+├── chess_test3.py  — T9–T12:  disconnect and reconnect
+├── chess_test4.py  — T13–T16: disconnect timeout, game over
+├── chess_test5.py  — T17–T20: quick join, explicit join, spectator
+├── chess_test6.py  — T21–T24: spectator view, legal moves
+├── chess_test7.py  — T25–T28: checkmate flow
+├── chess_test8.py  — T29–T31: game abandoned
+├── chess_test9.py  — T32–T34: return-to-game panel
+├── helpers.py      — registration helper with rate-limit guard
+└── cleanup.py      — DB cleanup via docker exec between test runs
 ```
+
+---
+
+## CI Pipeline
+
+```text
+lint ──┐
+       ├──► docker-build ──► e2e ──► publish
+test ──┘                      ↑
+type-check ────────────────────
+```
+
+| Job | Trigger | Description |
+|---|---|---|
+| `lint` | push dev, PR→main, tag | ruff check on `app/` and `tests/` |
+| `type-check` | push dev, PR→main, tag | mypy on `app/` |
+| `test` | push dev, PR→main, tag | pytest unit tests (SQLite + mock Redis) |
+| `docker-build` | push dev, PR→main, tag | builds Docker image, saves as artifact |
+| `e2e` | PR→main, tag, manual | full stack via `docker-compose.e2e.yml`, Playwright tests |
+| `publish` | tag only | loads artifact, tags and pushes to `ghcr.io` |
+
+`publish` is gated behind `e2e` — a version is never pushed to the registry without passing the full integration suite.
+
+The `e2e` job pulls `chess-auth-service`, `chess-room-service`, and `chess-frontend-service` from `ghcr.io` using a `PAT_TOKEN` secret, and uses the locally built `chess-game-service` image from the artifact.
+
+E2e infrastructure files:
+
+| File | Purpose |
+|---|---|
+| `docker-compose.e2e.yml` | Full stack: 3 MySQL DBs, Redis, 3 backend services, nginx frontend |
+| `.env.e2e` | Test credentials and shared JWT config for the e2e stack |
+| `e2e_versions.env` | Pinned image versions for auth, room, and frontend services |
+| `nginx.dev.conf` | Nginx reverse proxy config mounted into the frontend container |
+| `pytest-e2e.ini` | pytest config pointing to `e2e_tests/` |
+| `requirements-e2e.txt` | `pytest-playwright` and `playwright` |
 
 ---
 
@@ -358,7 +408,7 @@ Games are **deleted from the database** when they end — there is no `finished`
 When a player disconnects from an active game:
 
 1. Server broadcasts `player_disconnected` to all connections
-2. A 30-second key is set in Redis: `game:disconnect:{game_id}:{color}`
+2. A 40-second key is set in Redis: `game:disconnect:{game_id}:{color}` (TTL is 40s so the 30s timer always finds it)
 3. If the player reconnects within 30 seconds, the key is deleted, the reconnecting player receives the current `game_state` personally, and `player_reconnected` is broadcast to all
 4. If 30 seconds pass without reconnection, the disconnected player loses, `game_over` is broadcast via WebSocket to remaining connections, and `game_over` is published to Redis
 
@@ -521,7 +571,9 @@ Cross-service foreign keys are intentionally avoided. `room_id`, `white_player_i
 
 ## Automated Tests
 
-Run tests:
+### Unit tests
+
+Run:
 
 ```bash
 pytest tests/ -v
@@ -571,3 +623,78 @@ Current test count:
 ```text
 51 passed
 ```
+
+### End-to-end tests
+
+E2e tests run the full service stack via `docker-compose.e2e.yml` and drive a real browser with Playwright. They cover 34 scenarios across 9 test modules (T1–T34).
+
+Run locally (requires the e2e stack to be up):
+
+```bash
+docker compose -f docker-compose.e2e.yml --env-file .env.combined up -d --wait
+pip install -r requirements-e2e.txt
+playwright install chromium --with-deps
+python -m pytest -c pytest-e2e.ini -v
+```
+
+In CI, the e2e job runs automatically on pull requests to `main`, on tag pushes, and on manual dispatch.
+
+---
+
+## Bug Fixes
+
+Documented so these issues are not re-introduced.
+
+### 1. `game_abandoned` false positive on waiting games
+
+`is_player` check in `ws.py` evaluated to `True` for any user connecting to a waiting game because `black_player_id` was `None` and `user_id in (white_player_id, None)` behaved unexpectedly. This caused `game_abandoned` to fire when white connected to a waiting game.
+
+**Fix:** explicit `None` guard — `is_player` only returns `True` if `black_player_id is not None`.
+
+### 2. White player not notified on game start
+
+When `room_activated` was processed, game-service called `send_personal(game_state)` only to the joining player. White was already connected but never received a signal that the game started.
+
+**Fix:** changed to `broadcast(game_start)` so all connected clients receive the activation signal.
+
+### 3. `current_turn` missing on game creation
+
+`game_repo.create_game()` did not set `current_turn`, so the field was `None` in the database.
+
+**Fix:** `create_game()` now sets `current_turn = "white"` on creation.
+
+### 4. Game record deleted before final WebSocket broadcast
+
+On game end, the game row was deleted before the `game_over` WS message was built and sent. SQLAlchemy's session expiration caused attribute access on the deleted object to raise `DetachedInstanceError`.
+
+**Fix:** `db.expunge(game)` is called before `db.delete(game)` — the object is detached from the session but its attributes remain accessible for serialization.
+
+### 5. Last-move highlight not sent to opponent
+
+After a move, the opponent received a `game_state` message with no indication of which move was just played. The frontend had no way to highlight the last move.
+
+**Fix:** last move is stored in Redis as `game:last_move:{game_id}` after each move and included in all `game_state` and `game_over` broadcasts, including personal messages sent to reconnecting players and spectators.
+
+### 6. Stale board state after WebSocket reconnect
+
+MySQL's default `REPEATABLE READ` isolation level caused SQLAlchemy to return a cached snapshot of the game row for the entire duration of a WebSocket connection's transaction. Reconnecting players saw the board state from when they first connected.
+
+**Fix:** `db.rollback()` is called at the start of each WS message handler to force a fresh read from the database.
+
+### 7. Stale disconnect task on rapid reconnect
+
+If a player disconnected and reconnected within the 30-second window, the old abandon timer kept running. When it expired it broadcast `game_abandoned` even though the player was back.
+
+**Fix:** the disconnect task is tracked per-connection and cancelled on reconnect before starting any new timer.
+
+### 8. `ws_relay` asyncio task never received Redis messages under uvloop
+
+`ws_relay.py` subscribed to the `ws_broadcast` Redis channel using an asyncio `aioredis` task. Under uvicorn's uvloop event loop, the asyncio StreamReader socket reads did not wake up the task even though data had arrived — confirmed by `PUBSUB NUMSUB` returning 1 and `PUBLISH` returning 1, but the task logger never firing.
+
+**Fix:** replaced the asyncio relay task with a `threading.Thread` running a sync `redis.from_url` pub/sub subscriber. The thread bridges back to the event loop via `asyncio.run_coroutine_threadsafe(manager.local_broadcast(...), _loop)`.
+
+### 9. Abandon timeout race condition
+
+The abandon timer used `asyncio.sleep(30)` and the Redis disconnect key TTL was also 30 seconds. Due to event loop scheduling overhead, the sleep woke up slightly after 30 seconds — by which point the key had already expired. The timer then saw no key and did nothing, leaving the abandoned game uncleaned.
+
+**Fix:** Redis key TTL is set to 40 seconds (`DISCONNECT_TTL + 10`). The asyncio timer still fires at 30 seconds, but the key is guaranteed to still be present when it checks. The player-facing countdown remains 30 seconds.
