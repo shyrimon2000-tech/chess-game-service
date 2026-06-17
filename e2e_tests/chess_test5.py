@@ -41,13 +41,13 @@ def pages(browser):
 
 def test_T17_quick_join_creates_room_when_none_available(pages):
     p1 = state['p1']
-    # ensure no waiting rooms exist for this suffix
     p1.goto(BASE + '/rooms.html')
     p1.wait_for_selector('#quick-join-btn', state='visible', timeout=10000)
     p1.click('#quick-join-btn')
-    # should show "Waiting for opponent" panel (new room created)
-    p1.wait_for_selector('#create-room-info:not(.hidden)', timeout=30000)
-    assert 'Room #' in p1.locator('#created-room-id').text_content()
+    # quick-join creates a room and navigates p1 directly to game.html in waiting status
+    p1.wait_for_url('**/game.html**', timeout=30000)
+    p1.wait_for_function("document.getElementById('game-status')?.textContent === 'waiting'", timeout=10000)
+    assert p1.locator('#game-status').text_content() == 'waiting'
 
 
 def test_T18_quick_join_joins_existing_room(pages):
