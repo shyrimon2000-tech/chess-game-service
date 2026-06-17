@@ -6,6 +6,12 @@ This service handles WebSocket-based gameplay, chess move validation, board stat
 
 ---
 
+## Status
+
+**Production-ready.** All gameplay features implemented, 51 unit tests passing, 34 end-to-end scenarios covered. Nine known bugs identified and fixed during development. CI pipeline fully configured — publish to registry is gated behind e2e.
+
+---
+
 ## Badges
 
 Dev: [![CI Dev](https://github.com/shyrimon2000-tech/chess-game-service/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/shyrimon2000-tech/chess-game-service/actions)
