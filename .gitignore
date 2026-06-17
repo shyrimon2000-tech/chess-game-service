@@ -20,3 +20,6 @@ dist/
 build/
 *.log
 .claude/settings.local.json
+.env.combined
+e2e_tests/.reg_times.json
+*.tar.gz

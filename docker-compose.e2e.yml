@@ -1,0 +1,171 @@
+services:
+
+  # ── Databases ──────────────────────────────────────────────
+
+  auth-db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE_AUTH}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    networks:
+      - chess_auth_internal
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} -e 'SELECT 1' $${MYSQL_DATABASE} 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  room-db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE_ROOM}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    networks:
+      - chess_room_internal
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} -e 'SELECT 1' $${MYSQL_DATABASE} 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  game-db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE_GAME}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    networks:
+      - chess_game_internal
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} -e 'SELECT 1' $${MYSQL_DATABASE} 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Redis (shared between room and game services) ──────────
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - chess_room_internal
+      - chess_game_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Backend services ───────────────────────────────────────
+
+  chess-auth-service:
+    image: ghcr.io/shyrimon2000-tech/chess-auth-service:${AUTH_SERVICE_VERSION}
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - .env.e2e
+    environment:
+      DATABASE_URL: ${DATABASE_URL_AUTH}
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    networks:
+      - chess_auth_internal
+      - chess_frontend_internal
+    init: true
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  chess-room-service:
+    image: ghcr.io/shyrimon2000-tech/chess-room-service:${ROOM_SERVICE_VERSION}
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - .env.e2e
+    environment:
+      DATABASE_URL: ${DATABASE_URL_ROOM}
+    depends_on:
+      room-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - chess_room_internal
+      - chess_frontend_internal
+    init: true
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  chess-game-service:
+    build: .
+    #image: chess-game-service
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - .env.e2e
+    environment:
+      DATABASE_URL: ${DATABASE_URL_GAME}
+    depends_on:
+      game-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - chess_game_internal
+      - chess_frontend_internal
+    init: true
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Frontend ───────────────────────────────────────────────
+
+  chess-frontend:
+    image: ghcr.io/shyrimon2000-tech/chess-frontend-service:${FRONTEND_VERSION}
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      chess-auth-service:
+        condition: service_healthy
+      chess-room-service:
+        condition: service_healthy
+      chess-game-service:
+        condition: service_healthy
+    networks:
+      - chess_frontend_internal
+
+networks:
+  chess_auth_internal:
+    driver: bridge
+  chess_room_internal:
+    driver: bridge
+  chess_game_internal:
+    driver: bridge
+  chess_frontend_internal:
+    driver: bridge
