@@ -187,3 +187,42 @@ jobs:
         run: |
           docker tag chess-game-service ghcr.io/shyrimon2000-tech/chess-game-service:${{ steps.version.outputs.VERSION }}
           docker push ghcr.io/shyrimon2000-tech/chess-game-service:${{ steps.version.outputs.VERSION }}
+
+  deploy:
+    name: Bump dev image tag
+    runs-on: ubuntu-latest
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Checkout infra repository
+        uses: actions/checkout@v4
+        with:
+          repository: shyrimon2000-tech/chess-infrastructure
+          ref: dev
+          token: ${{ secrets.INFRA_REPO_PAT }}
+
+      - name: Install yq
+        uses: mikefarah/yq@v4
+
+      - name: Bump game.image.tag in values-dev.yaml
+        run: yq -i '.game.image.tag = "${{ steps.version.outputs.VERSION }}"' helm/chess-chart/values-dev.yaml
+
+      - name: Commit, push and open PR
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_REPO_PAT }}
+        run: |
+          git config user.name "chess-game-service-cd"
+          git config user.email "actions@users.noreply.github.com"
+          BRANCH="bump-chess-game-service-${{ steps.version.outputs.VERSION }}"
+          git checkout -b "$BRANCH"
+          git commit -am "chore(dev): bump chess-game-service to ${{ steps.version.outputs.VERSION }}"
+          git push origin "$BRANCH"
+          gh pr create --repo shyrimon2000-tech/chess-infrastructure --base dev --head "$BRANCH" \
+            --title "chore(dev): bump chess-game-service to ${{ steps.version.outputs.VERSION }}" \
+            --body "Automated image tag bump from chess-game-service CI (tag ${{ steps.version.outputs.VERSION }})."
+          gh pr merge --repo shyrimon2000-tech/chess-infrastructure "$BRANCH" --auto --squash
